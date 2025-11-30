@@ -2,9 +2,9 @@
 <index version="1" name="DocShadrach FXs">
 
  <category name="Utilities">
-    <reapack name="DocShadrach_Rename selected tracks using ReaImGui with selection auto-update.lua" type="script" desc="DocShadrach_Rename selected tracks using ReaImGui with selection auto-update">
-    <version name="1.0.0" author="Doc Shadrach" time="2024-10-26T07:01:00Z">
-    <source main="main">https://raw.githubusercontent.com/DocShadrach/MyReaperScripts/refs/heads/main/Utilities/DocShadrach_Rename%20selected%20tracks%20using%20ReaImGui%20with%20selection%20auto-update.lua</source>
+    <reapack name="Tempo Synced Pre-Delay (DocShadrach)" type="script" desc="Tempo Synced Pre-Delay (DocShadrach)">
+    <version name="1.0.0" author="Doc Shadrach" time="2025-11-30T07:00:00Z">
+    <source main="main">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/d26f51c94860c8a68ca8a252cc7855e8a6769078/Tempo%20Synced%20Pre-Delay%20%20(DocShadrach)</source>
     </version>
     </reapack>
  </category>
