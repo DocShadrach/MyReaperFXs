@@ -1,4 +1,6 @@
 desc: Tempo Synced Pre-Delay (DocShadrach)
+author: DocShadrach
+version: 1.0
 
 slider1:2<0,6,1{1/2,1/4,1/8,1/16,1/32,1/64,1/128}>Delay Sync (Beat Division)
 slider2:0<0,2,1{Normal,Triplet,Dotted}>Note Type
