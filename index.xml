@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs">
+<index version="1" name="DocShadrach FXs" commit="a876c4afa0ec53d6c45338d14f44b53bf90a85c8">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
-    <version name="1.0.0" author="Doc Shadrach" time="2025-11-30T08:00:00Z">
-    <source main="main">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/a876c4afa0ec53d6c45338d14f44b53bf90a85c8/Tempo_Synced_Pre-Delay.jsfx</source>
+     <metadata>
+      <description><![CDATA[
+Tempo Synced Pre-Delay
+======================
+Author: Doc Shadrach
+
+A pre-delay effect synced to your project's tempo in Reaper.
+Ideal for creating rhythmic spaces before a reverb.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-11-30T09:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="Tempo_Synced_Pre-Delay.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/a876c4afa0ec53d6c45338d14f44b53bf90a85c8/Tempo_Synced_Pre-Delay.jsfx</source>
     </version>
     </reapack>
  </category>
