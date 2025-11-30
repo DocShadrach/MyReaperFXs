@@ -2,7 +2,7 @@
 <index version="1" name="DocShadrach FXs">
 
  <category name="Utilities">
-    <reapack name="Tempo Synced Pre-Delay (DocShadrach)" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
+    <reapack name="Tempo Synced Pre-Delay" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
     <version name="1.0.0" author="Doc Shadrach" time="2025-11-30T07:00:00Z">
     <source main="main">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/d26f51c94860c8a68ca8a252cc7855e8a6769078/Tempo%20Synced%20Pre-Delay%20%20(DocShadrach)</source>
     </version>
