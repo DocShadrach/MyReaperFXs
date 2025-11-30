@@ -7,6 +7,12 @@
     <source main="main">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/86964e75c363214de529e0694b2e4b73cabaf4a0/Tempo%20Synced%20Pre-Delay</source>
     </version>
     </reapack>
+
+    <reapack name="Test Plugin (DocShadrach)" type="effect" desc="Test Plugin (DocShadrach)">
+    <version name="1.0.0" author="Doc Shadrach" time="2025-11-30T07:00:00Z">
+    <source main="main">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/9675f7f68b6d3e485429aa8f863dfe4b1476ec36/Test%20Plugin</source>
+    </version>
+    </reapack>
  </category>
 
 </index>
