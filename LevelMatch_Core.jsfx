@@ -1,0 +1,482 @@
+desc: LevelMatch Core (DocShadrach)
+author: DocShadrach
+version: 1.0
+
+options: gmem=LM_Core_GainLink
+
+// ---------------------------------------------------------------------
+// 1. SLIDER DEFINITIONS
+// ---------------------------------------------------------------------
+
+slider1:0<0,1,1{Sender (Start),Receiver (End)}>Mode
+slider2:0<0,1,1{Off,On}>Auto-Match Active
+slider3:0<0,2,1{FX (Wet),Reference (Dry),DELTA}>Monitor Source
+slider4:10<10,500,1>Reaction Time (ms)
+slider5:1<0,2,1{Energy Match (RMS),Null Hunter,Perceptual (LUFS)}>Algorithm
+slider6:0.0<-60,12,0.1>Offset Diff (dB)
+
+// We keep this separator to indicate where common/sender controls start
+slider51:0<0,0,0>--- Sender / Common ---
+slider10:0<-24,24,0.1>Drive / Gain (dB)
+slider11:0<0,64,1>Link Group (0=Off)
+
+// ---------------------------------------------------------------------
+
+in_pin:Input L
+in_pin:Input R
+in_pin:Ref L
+in_pin:Ref R
+out_pin:Output L
+out_pin:Output R
+out_pin:Ref Output L
+out_pin:Ref Output R
+
+@init
+  sum_wd = 0; sum_ww = 0; 
+  sum_w_rms = 0; sum_d_rms = 0;
+  current_gain = 1.0; avg_gain_accum = 1.0;
+  last_mouse_cap = 0;
+  gs_gain = 1.0;
+  
+  // Interaction State Machine
+  // 0 = None, 1 = Reset Clicked, 2 = Knob Dragging, 3 = Text Dragging
+  interaction_state = 0;
+  start_y = 0;
+  start_val = 0;
+  
+  // Double click vars
+  last_click_time = 0;
+  dbl_click_speed = 0.25;
+  
+  // Mouse Wheel vars
+  last_mw = 0;
+
+  // --- K-WEIGHTING FILTER STATE VARS (History) ---
+  hs_x1_inL=0; hs_x2_inL=0; hs_y1_inL=0; hs_y2_inL=0;
+  hs_x1_inR=0; hs_x2_inR=0; hs_y1_inR=0; hs_y2_inR=0;
+  hs_x1_refL=0; hs_x2_refL=0; hs_y1_refL=0; hs_y2_refL=0;
+  hs_x1_refR=0; hs_x2_refR=0; hs_y1_refR=0; hs_y2_refR=0;
+  
+  hp_x1_inL=0; hp_x2_inL=0; hp_y1_inL=0; hp_y2_inL=0;
+  hp_x1_inR=0; hp_x2_inR=0; hp_y1_inR=0; hp_y2_inR=0;
+  hp_x1_refL=0; hp_x2_refL=0; hp_y1_refL=0; hp_y2_refL=0;
+  hp_x1_refR=0; hp_x2_refR=0; hp_y1_refR=0; hp_y2_refR=0;
+
+@slider
+  win_ms = slider4;
+  att = exp(-1/(srate * (win_ms * 0.001))); 
+  avg_coeff = exp(-1/(srate * 3.0)); 
+
+  // --- FILTER COEFFICIENTS (LUFS) ---
+  f0_shelf = 1500; gain_shelf = 4.0; Q_shelf = 0.707;
+  A = 10^(gain_shelf/40);
+  w0 = 2 * $pi * f0_shelf / srate;
+  alpha = sin(w0) / 2 * sqrt( (A + 1/A)*(1/Q_shelf - 1) + 2 );
+  cosw0 = cos(w0);
+  
+  b0_hs =    A*( (A+1) + (A-1)*cosw0 + 2*sqrt(A)*alpha );
+  b1_hs = -2*A*( (A-1) + (A+1)*cosw0                   );
+  b2_hs =    A*( (A+1) + (A-1)*cosw0 - 2*sqrt(A)*alpha );
+  a0_hs =      ( (A+1) - (A-1)*cosw0 + 2*sqrt(A)*alpha );
+  a1_hs =    2*( (A-1) - (A+1)*cosw0                   );
+  a2_hs =      ( (A+1) - (A-1)*cosw0 - 2*sqrt(A)*alpha );
+  
+  inv_a0_hs = 1 / a0_hs;
+  b0_hs *= inv_a0_hs; b1_hs *= inv_a0_hs; b2_hs *= inv_a0_hs;
+  a1_hs *= inv_a0_hs; a2_hs *= inv_a0_hs;
+
+  f0_hp = 38; Q_hp = 0.5;
+  w0_hp = 2 * $pi * f0_hp / srate;
+  alpha_hp = sin(w0_hp) / (2 * Q_hp);
+  cosw0_hp = cos(w0_hp);
+  
+  b0_hp =  (1 + cosw0_hp) / 2; b1_hp = -(1 + cosw0_hp); b2_hp =  (1 + cosw0_hp) / 2;
+  a0_hp =   1 + alpha_hp;      a1_hp =  -2 * cosw0_hp;  a2_hp =   1 - alpha_hp;
+  
+  inv_a0_hp = 1 / a0_hp;
+  b0_hp *= inv_a0_hp; b1_hp *= inv_a0_hp; b2_hp *= inv_a0_hp;
+  a1_hp *= inv_a0_hp; a2_hp *= inv_a0_hp;
+
+  // --- VISIBILITY LOGIC ---
+  // slider1=0 is Sender. slider1=1 is Receiver.
+  is_sender = (slider1 == 0);
+  
+  // If Sender, HIDE Receiver Params
+  slider_show(slider2, !is_sender);
+  slider_show(slider3, !is_sender);
+  slider_show(slider4, !is_sender);
+  slider_show(slider5, !is_sender);
+  slider_show(slider6, !is_sender);
+  
+  // Separator 51 (Sender/Common) and Sliders 10,11 always visible
+
+@block
+  mode = 1 - slider1;
+  active = slider2;
+  mon = slider3;
+  algo = slider5;
+  
+  // --- GAIN STAGING ---
+  link_id = floor(slider11);
+  drive_val = slider10;
+  
+  (link_id > 0) ? (
+      (mode == 1) ? (
+          gmem[link_id] = drive_val; 
+      ) : (
+          remote_val = gmem[link_id]; 
+          target_drive = -remote_val; 
+          (abs(slider10 - target_drive) > 0.0001) ? (
+              slider10 = target_drive;
+              slider_automate(slider10);
+          );
+          drive_val = target_drive;
+      );
+  );
+  
+  gs_gain = 10 ^ (drive_val / 20);
+  val_db = -20 * log10(avg_gain_accum);
+  slider6 = val_db;
+
+@sample
+  inL = spl0; inR = spl1; refL = spl2; refR = spl3;
+
+  (mode == 1) ? (
+      // SENDER
+      spl2 = inL; spl3 = inR; 
+      spl0 = inL * gs_gain; spl1 = inR * gs_gain; 
+  ) : (
+      // RECEIVER
+      inL *= gs_gain; inR *= gs_gain;
+      
+      det_inL = inL; det_inR = inR;
+      det_refL = refL; det_refR = refR;
+
+      (algo == 2) ? (
+          // LUFS Filtering
+          tmp = b0_hs*det_inL + b1_hs*hs_x1_inL + b2_hs*hs_x2_inL - a1_hs*hs_y1_inL - a2_hs*hs_y2_inL;
+          hs_x2_inL = hs_x1_inL; hs_x1_inL = det_inL; hs_y2_inL = hs_y1_inL; hs_y1_inL = tmp; det_inL = tmp;
+          tmp = b0_hs*det_inR + b1_hs*hs_x1_inR + b2_hs*hs_x2_inR - a1_hs*hs_y1_inR - a2_hs*hs_y2_inR;
+          hs_x2_inR = hs_x1_inR; hs_x1_inR = det_inR; hs_y2_inR = hs_y1_inR; hs_y1_inR = tmp; det_inR = tmp;
+          tmp = b0_hs*det_refL + b1_hs*hs_x1_refL + b2_hs*hs_x2_refL - a1_hs*hs_y1_refL - a2_hs*hs_y2_refL;
+          hs_x2_refL = hs_x1_refL; hs_x1_refL = det_refL; hs_y2_refL = hs_y1_refL; hs_y1_refL = tmp; det_refL = tmp;
+          tmp = b0_hs*det_refR + b1_hs*hs_x1_refR + b2_hs*hs_x2_refR - a1_hs*hs_y1_refR - a2_hs*hs_y2_refR;
+          hs_x2_refR = hs_x1_refR; hs_x1_refR = det_refR; hs_y2_refR = hs_y1_refR; hs_y1_refR = tmp; det_refR = tmp;
+
+          tmp = b0_hp*det_inL + b1_hp*hp_x1_inL + b2_hp*hp_x2_inL - a1_hp*hp_y1_inL - a2_hp*hp_y2_inL;
+          hp_x2_inL = hp_x1_inL; hp_x1_inL = det_inL; hp_y2_inL = hp_y1_inL; hp_y1_inL = tmp; det_inL = tmp;
+          tmp = b0_hp*det_inR + b1_hp*hp_x1_inR + b2_hp*hp_x2_inR - a1_hp*hp_y1_inR - a2_hp*hp_y2_inR;
+          hp_x2_inR = hp_x1_inR; hp_x1_inR = det_inR; hp_y2_inR = hp_y1_inR; hp_y1_inR = tmp; det_inR = tmp;
+          tmp = b0_hp*det_refL + b1_hp*hp_x1_refL + b2_hp*hp_x2_refL - a1_hp*hp_y1_refL - a2_hp*hp_y2_refL;
+          hp_x2_refL = hp_x1_refL; hp_x1_refL = det_refL; hp_y2_refL = hp_y1_refL; hp_y1_refL = tmp; det_refL = tmp;
+          tmp = b0_hp*det_refR + b1_hp*hp_x1_refR + b2_hp*hp_x2_refR - a1_hp*hp_y1_refR - a2_hp*hp_y2_refR;
+          hp_x2_refR = hp_x1_refR; hp_x1_refR = det_refR; hp_y2_refR = hp_y1_refR; hp_y1_refR = tmp; det_refR = tmp;
+      );
+
+      w = (det_inL+det_inR)*0.5; d = (det_refL+det_refR)*0.5;
+      target_ratio = 1.0;
+      (algo == 1) ? (
+          sum_wd = sum_wd*att + (w*d)*(1-att);
+          sum_ww = sum_ww*att + (w*w)*(1-att);
+          (sum_ww > 0.0000001) ? target_ratio = sum_wd / sum_ww;
+      ) : (
+          sum_w_rms = sum_w_rms*att + (w*w)*(1-att);
+          sum_d_rms = sum_d_rms*att + (d*d)*(1-att);
+          (sum_w_rms > 0.0000001) ? target_ratio = sqrt(sum_d_rms / sum_w_rms);
+      );
+      
+      target_ratio = max(0.1, min(10.0, target_ratio));
+      avg_gain_accum = avg_gain_accum*avg_coeff + target_ratio*(1-avg_coeff);
+      target_final = active ? target_ratio : 1.0;
+      slew = 1.0 / (srate * 0.01); 
+      current_gain += (target_final - current_gain) * slew;
+      
+      procL = inL * current_gain; procR = inR * current_gain;
+      (mon == 0) ? (outL=procL; outR=procR;);
+      (mon == 1) ? (outL=refL; outR=refR;); 
+      (mon == 2) ? (outL=procL-refL; outR=procR-refR;);
+      spl0=outL; spl1=outR; spl2=refL; spl3=refR;
+  );
+
+@gfx 360 280
+  gfx_set(0.15,0.15,0.17,1); gfx_rect(0,0,gfx_w,gfx_h);
+
+  // -----------------------------------------------------------------------
+  // 1. INPUT HANDLING
+  // -----------------------------------------------------------------------
+  mouse_down = (mouse_cap & 1);
+  is_click = mouse_down && (last_mouse_cap == 0);
+  
+  // FIX: Only switch to embedded mode if actually in TCP (Track Control Panel)
+  // Removed height check (gfx_h) so floating window is always Full UI.
+  is_embedded = (gfx_ext_flags != 0);
+  
+  // --- MOUSE WHEEL LOGIC ---
+  mw_diff = (mouse_wheel - last_mw);
+  last_mw = mouse_wheel;
+
+  // --- CLICK EVENT ---
+  is_click ? (
+      (mode == 1) ? ( // SENDER
+          is_embedded ? (
+              // TCP Sender
+              // Check if Linked
+              (slider11 > 0) ? (
+                  (mouse_x <= 22) ? (
+                      slider10 = 0.0; slider_automate(slider10);
+                      interaction_state = 1; // Reset locked
+                  ) : (
+                      interaction_state = 2; // Knob Drag
+                      start_y = mouse_y; start_val = slider10;
+                  );
+              );
+          ) : (
+              // FULL Sender
+              (time_precise() - last_click_time < dbl_click_speed) ? (
+                  (mouse_y > gfx_h/2) ? (
+                      slider10 = 0.0; slider_automate(slider10);
+                      interaction_state = 1; 
+                  );
+                  last_click_time = 0;
+              ) : (
+                  last_click_time = time_precise();
+                  interaction_state = 3; // Text Drag
+                  start_y = mouse_y; start_val = slider10;
+              );
+          );
+      ) : ( 
+          // RECEIVER
+          is_embedded ? (
+             (mouse_x <= 50) ? (slider2 = 1 - slider2; slider_automate(slider2););
+          ) : (
+             (mouse_y > 180 && mouse_y < 210) ? (
+                 (mouse_x < 90) ? (slider2 = 1 - slider2; slider_automate(slider2););
+                 (mouse_x > 100) ? (slider3 = (slider3 == 0) ? 1 : 0; slider_automate(slider3););
+             );
+             (mouse_y > 225) ? (slider5 = (slider5 + 1) % 3; slider_automate(slider5););
+          );
+      );
+  );
+
+  // --- DRAG HANDLING ---
+  (mouse_down) ? (
+      (interaction_state == 2 || interaction_state == 3) ? (
+          dy = start_y - mouse_y;
+          sens = (mouse_cap & 8) ? 0.05 : 0.2;
+          new_val = min(24, max(-24, start_val + dy * sens));
+          (abs(new_val - slider10) > 0.001) ? (
+              slider10 = new_val;
+              slider_automate(slider10);
+          );
+      );
+  ) : (
+      interaction_state = 0;
+  );
+
+  // --- WHEEL HANDLING (TCP SENDER ONLY) ---
+  (mode == 1 && is_embedded && mw_diff != 0 && slider11 > 0) ? (
+      // Check if mouse is over knob area (right side)
+      (mouse_x > 22 && mouse_x < gfx_w && mouse_y > 0 && mouse_y < gfx_h) ? (
+          step = (mouse_cap & 8) ? 0.1 : 0.5;
+          dir = (mw_diff > 0) ? 1 : -1;
+          new_val = min(24, max(-24, slider10 + (dir * step)));
+          slider10 = new_val;
+          slider_automate(slider10);
+      );
+  );
+
+  last_mouse_cap = mouse_down;
+
+  // -----------------------------------------------------------------------
+  // 2. DRAWING
+  // -----------------------------------------------------------------------
+  active = slider2; 
+  curr_db = 20*log10(avg_gain_accum);
+  display_db = curr_db * -1;
+  is_centered = abs(display_db) < 0.1;
+
+  (mode == 1) ? (
+      // ==============================
+      // SENDER DRAW
+      // ==============================
+      is_embedded ? (
+          
+          (slider11 == 0) ? (
+             // --- NOT LINKED SCREEN ---
+             gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(0,0,gfx_w,gfx_h); // Dark bg
+             gfx_set(1, 0.2, 0.2, 1); // Red Text
+             
+             gfx_setfont(1, "Arial", 12, 'b');
+             gfx_measurestr("NOT", w1, h1);
+             gfx_measurestr("LINKED", w2, h2);
+             
+             total_h = h1 + h2 + 2;
+             start_y = (gfx_h - total_h) / 2;
+             
+             gfx_x = (gfx_w - w1) / 2; gfx_y = start_y; 
+             gfx_drawstr("NOT");
+             gfx_x = (gfx_w - w2) / 2; gfx_y += h1 + 2;
+             gfx_drawstr("LINKED");
+             
+          ) : (
+             // --- TCP SENDER (NORMAL) ---
+             btn_w = 22;
+             (interaction_state == 1) ? gfx_set(0.4, 0.4, 0.4, 1) : gfx_set(0.25, 0.25, 0.25, 1);
+             gfx_rect(0, 0, btn_w, gfx_h);
+             
+             gfx_setfont(2, "Arial", 10, 'b'); 
+             gfx_measurestr("R", ch_w, ch_h);
+             num_chars = 5; total_txt_h = num_chars * ch_h;
+             
+             (total_txt_h > gfx_h - 4) ? (
+                gfx_set(1, 1, 1, 1); gfx_x=(btn_w-ch_w)/2; gfx_y=(gfx_h-ch_h)/2; gfx_drawstr("0");
+             ) : (
+                gfx_set(1,1,1,1);
+                start_y = (gfx_h - total_txt_h) / 2;
+                i = 0;
+                loop(5,
+                    gfx_x = (btn_w - ch_w) / 2; gfx_y = start_y + (i * ch_h);
+                    (i==0)?c="R":(i==1)?c="E":(i==2)?c="S":(i==3)?c="E":c="T";
+                    gfx_drawstr(c); i+=1;
+                );
+             );
+             gfx_set(0,0,0,1); gfx_line(btn_w, 0, btn_w, gfx_h);
+
+             // Knob
+             avail_w = gfx_w - btn_w; cx = btn_w + avail_w / 2; cy = gfx_h / 2;
+             radius = min(avail_w, gfx_h) * 0.35; 
+             (interaction_state == 2) ? gfx_set(0.15, 0.15, 0.15, 1) : gfx_set(0.1, 0.1, 0.1, 1);
+             gfx_circle(cx, cy, radius, 1);
+             gfx_set(0.3, 0.3, 0.3, 1); gfx_circle(cx, cy, radius, 0); 
+             
+             norm_val = (slider10 + 24) / 48; 
+             ang = -2.35619 + (norm_val * 4.71239);
+             ix = cx + sin(ang) * (radius * 0.9); iy = cy - cos(ang) * (radius * 0.9);
+             (slider10 > 0) ? gfx_set(1, 0.4, 0.2, 1) : gfx_set(0.2, 0.6, 1, 1);
+             gfx_line(cx, cy, ix, iy);
+             
+             gfx_setfont(1, "Arial", 14, 'b'); gfx_set(1, 1, 1, 1);
+             str_v = sprintf(#, "%+.1f", slider10);
+             gfx_measurestr(str_v, tw, th);
+             (gfx_h > (radius*2 + 30)) ? (gfx_x = cx - tw/2; gfx_y = cy + radius + 5;) 
+                                       : (gfx_x = cx - tw/2; gfx_y = cy - th/2; gfx_set(0,0,0,0.6); gfx_rect(gfx_x-2, gfx_y-2, tw+4, th+4); gfx_set(1,1,1,1););
+             gfx_drawstr(str_v);
+
+             gfx_setfont(1, "Arial", 10); gfx_set(0.6, 0.6, 0.6, 1);
+             gfx_measurestr("DRIVE", dw, dh); 
+             gfx_x = cx - dw/2; gfx_y = cy - radius - dh - 2;
+             (gfx_y < 2) ? gfx_y = cy + radius + 18; 
+             gfx_drawstr("DRIVE");
+          );
+
+      ) : (
+          // --- FULL SENDER ---
+          gfx_set(1,1,1,0.5); gfx_setfont(1, "Arial", 18, 'b');
+          gfx_measurestr("SENDER", sw, sh); gfx_x=(gfx_w-sw)/2; gfx_y=(gfx_h-sh)/2 - 50; gfx_drawstr("SENDER");
+
+          gfx_setfont(1, "Arial", 11); gfx_set(1, 0.4, 0.4, 0.8);
+          msg1 = "REMEMBER TO SET 4 CHANNELS TO THIS TRACK";
+          msg2 = "AND PUT ANOTHER INSTANCE IN RECEIVER MODE";
+          msg3 = "AT THE END OF THE CHAIN";
+          gfx_measurestr(msg1, w1, h1); gfx_x=(gfx_w-w1)/2; gfx_y+=30; gfx_drawstr(msg1);
+          gfx_measurestr(msg2, w2, h2); gfx_x=(gfx_w-w2)/2; gfx_y+=12; gfx_drawstr(msg2);
+          gfx_measurestr(msg3, w3, h3); gfx_x=(gfx_w-w3)/2; gfx_y+=12; gfx_drawstr(msg3);
+
+          gfx_setfont(1, "Arial", 24, 'b');
+          d_str = sprintf(#, "DRIVE: %.1f dB", slider10);
+          gfx_measurestr(d_str, dw, dh);
+          gfx_x=(gfx_w-dw)/2; gfx_y=(gfx_h/2) + 30;
+          (slider10 > 0) ? gfx_set(1, 0.4, 0.2, 1) : ((slider10 < 0) ? gfx_set(0.2, 0.6, 1, 1) : gfx_set(0.8, 0.8, 0.8, 1));
+          gfx_drawstr(d_str);
+
+          gfx_setfont(1, "Arial", 12); gfx_set(0.6, 0.6, 0.6, 1);
+          l_str = (slider11 > 0) ? sprintf(#, "Linked to Group %d", slider11) : "Link Group: OFF";
+          gfx_measurestr(l_str, lw, lh); gfx_x=(gfx_w-lw)/2; gfx_y+=35; gfx_drawstr(l_str);
+
+          // === Link to Ko-Fi ===
+          gfx_setfont(1, "Arial", 16, 'b'); gfx_set(0.4, 0.7, 1.0, 1.0); 
+          link_msg = "Find this tool useful? Buy me a coffee: ko-fi.com/docshadrach";
+          gfx_measurestr(link_msg, lk_w, lk_h);
+          gfx_x = (gfx_w - lk_w)/2; 
+          gfx_y = gfx_h - 30; 
+          (gfx_y > (gfx_h/2) + 80) ? gfx_drawstr(link_msg);
+          // ====================================
+      );
+  ) : (
+      // ==============================
+      // RECEIVER DRAW
+      // ==============================
+      is_embedded ? (
+          // TCP Receiver
+          btn_w = 22; 
+          active ? (blink = sin(time_precise() * 8); (blink > 0) ? gfx_set(1, 0.2, 0.2, 1) : gfx_set(0.6, 0, 0, 1);) : gfx_set(0.25,0.25,0.25,1);
+          gfx_rect(0, 0, btn_w, gfx_h);
+          
+          gfx_setfont(2, "Arial", 13, 'b'); 
+          gfx_measurestr("O", ch_w, ch_h); num_chars = active ? 2 : 3; total_txt_h = num_chars * ch_h; start_y = (gfx_h - total_txt_h) / 2;
+          gfx_set(1,1,1,1);
+          active ? (gfx_x=(btn_w-ch_w)/2; gfx_y=start_y; gfx_drawstr("O"); gfx_x=(btn_w-ch_w)/2; gfx_y+=ch_h; gfx_drawstr("N");) 
+                 : (gfx_x=(btn_w-ch_w)/2; gfx_y=start_y; gfx_drawstr("O"); gfx_x=(btn_w-ch_w)/2; gfx_y+=ch_h; gfx_drawstr("F"); gfx_x=(btn_w-ch_w)/2; gfx_y+=ch_h; gfx_drawstr("F"););
+          gfx_set(0,0,0,1); gfx_line(btn_w, 0, btn_w, gfx_h); 
+
+          disp_x = btn_w; disp_w = gfx_w - btn_w;
+          is_centered ? gfx_set(0, 1, 0, 1) : ((display_db > 0) ? gfx_set(1, 0.5, 0.2, 1) : gfx_set(0.4, 0.7, 1, 1));
+          bar_h = max(4, min(10, gfx_h * 0.15)); bar_y = gfx_h - bar_h;
+          gfx_a = 0.3; gfx_rect(disp_x, bar_y, disp_w, bar_h); 
+          bar_mid_x = disp_x + disp_w/2; px_per_db = (disp_w / 2) / 6; bar_len = display_db * px_per_db;
+          clamp_len = max(-disp_w/2, min(disp_w/2, bar_len));
+          gfx_a = 1; 
+          (clamp_len < 0) ? gfx_rect(bar_mid_x + clamp_len, bar_y, abs(clamp_len), bar_h) : gfx_rect(bar_mid_x, bar_y, clamp_len, bar_h);
+          gfx_set(1,1,1,0.5); gfx_line(bar_mid_x, bar_y, bar_mid_x, gfx_h); 
+
+          text_area_h = gfx_h - bar_h; is_centered ? gfx_set(0, 1, 0, 1) : ((display_db > 0) ? gfx_set(1, 0.5, 0.2, 1) : gfx_set(0.4, 0.7, 1, 1));
+          str_val = ""; (display_db > 0.05) ? str_val = sprintf(#, "+%.1f", display_db); (display_db < -0.05) ? str_val = sprintf(#, "%.1f", display_db); is_centered ? str_val = "MATCH"; 
+          font_size = text_area_h * 0.9; gfx_setfont(1, "Arial", font_size, 'b'); gfx_measurestr(str_val, tw, th);
+          (tw > disp_w - 4) ? (ratio = (disp_w - 6) / tw; font_size = font_size * ratio; gfx_setfont(1, "Arial", font_size, 'b'); gfx_measurestr(str_val, tw, th););
+          gfx_x = disp_x + (disp_w - tw)/2; gfx_y = (text_area_h - th)/2; gfx_drawstr(str_val);
+      ) : (
+          // Full Receiver
+          
+          // WARNING MESSAGE FOR SMALL WINDOWS
+          (gfx_h < 260) ? (
+              gfx_setfont(1, "Arial", 10, 'i');
+              gfx_set(1, 0.6, 0.2, 0.8);
+              msg = "EXPAND WINDOW TO SEE CONTROLS";
+              gfx_measurestr(msg, mw, mh);
+              gfx_x = gfx_w - mw - 5; 
+              gfx_y = 5;
+              gfx_drawstr(msg);
+          );
+          
+          tx = 20; ty = 40; tw = gfx_w - 40; th = 40; mid_x = tx + tw/2;
+          gfx_set(0,0,0,0.5); gfx_rect(tx, ty, tw, th);
+          scale_px = 20; gfx_set(0.5,0.5,0.5,0.5); gfx_line(mid_x, ty, mid_x, ty+th); 
+          i=3; loop(2, off=i*scale_px; gfx_line(mid_x-off, ty+5, mid_x-off, ty+th-5); gfx_line(mid_x+off, ty+5, mid_x+off, ty+th-5); i+=3; );
+          bar_len = display_db * scale_px;
+          is_centered ? gfx_set(0, 1, 0, 1) : ((display_db > 0) ? gfx_set(1, 0.3, 0.2, 1) : gfx_set(0.2, 0.6, 1, 1));
+          clamp_len = max(-tw/2 + 2, min(tw/2 - 2, bar_len));
+          (clamp_len < 0) ? gfx_rect(mid_x + clamp_len, ty+2, abs(clamp_len), th-4) : gfx_rect(mid_x, ty+2, clamp_len, th-4);
+          
+          gfx_setfont(1, "Arial", 24); gfx_set(1,1,1,0.9);
+          str_val = ""; (display_db > 0) ? str_val="+"; str_val = sprintf(#, "%s%.1f dB", str_val, display_db);
+          gfx_measurestr(str_val, tw_str, th_str); gfx_x = mid_x - tw_str/2; gfx_y = ty + th + 5; gfx_drawstr(str_val);
+
+          gfx_setfont(1, "Arial", 13); gfx_set(1,1,1,0.5);
+          gfx_x = mid_x - 50; gfx_y += 25; is_centered ? gfx_drawstr("- PERFECT MATCH -") : gfx_drawstr("MATCH OFFSET");
+
+          (slider11 > 0) ? (gfx_set(0.2, 0.8, 0.2, 0.8); l_info = sprintf(#, "COMPENSATION: %.1f dB (GRP %d)", slider10, slider11);) : (gfx_set(0.5, 0.5, 0.5, 0.5); l_info = "NO LINK ACTIVE";);
+          gfx_measurestr(l_info, li_w, li_h); gfx_x = (gfx_w - li_w)/2; gfx_y += 15; gfx_drawstr(l_info);
+
+          but_y = 180; but_h = 30;
+          w1=80; x1=10; lbl = active ? "AUTO: ON" : "AUTO: OFF"; active ? (blink = sin(time_precise() * 8); (blink > 0) ? gfx_set(1, 0.2, 0.2, 0.9) : gfx_set(0.6, 0, 0, 0.9);) : gfx_set(0.3,0.3,0.3,1);
+          gfx_rect(x1, but_y, w1, but_h); gfx_set(1,1,1,1); gfx_measurestr(lbl, tw, th); gfx_x=x1+(w1-tw)/2; gfx_y=but_y+(but_h-th)/2; gfx_drawstr(lbl);
+          
+          x2=100; w2=240; (mon==0)?lbl="HEAR: FX (WET)": (mon==1)?lbl="HEAR: REFERENCE (DRY)":lbl="HEAR: DELTA (DIFF)";
+          gfx_set(0.3, 0.3, 0.3, 1); (mon==0)?gfx_set(0.2,0.5,0.9,1); (mon==1)?( blink = sin(time_precise() * 8); (blink > 0) ? gfx_set(1, 0.2, 0.2, 0.9) : gfx_set(0.6, 0, 0, 0.9); ); (mon==2)?gfx_set(0.6,0.2,0.6,1); 
+          gfx_rect(x2, but_y, w2, but_h); gfx_set(1,1,1,1); gfx_measurestr(lbl,sw,sh); gfx_x=x2+(w2-sw)/2; gfx_y=but_y+(but_h-sh)/2; gfx_drawstr(lbl);
+          
+          // 3. Algo
+          gfx_set(1,1,1,0.3); gfx_x=10; gfx_y=230; gfx_setfont(1,"Arial",12);
+          (algo==0)?gfx_drawstr("[Algorithm: Energy RMS]") : (algo==1)?gfx_drawstr("[Algorithm: Null Hunter]") : gfx_drawstr("[Algorithm: Perceptual LUFS]");
+      );
+  );
