@@ -1,6 +1,6 @@
 desc: LevelMatch Core (DocShadrach)
 author: DocShadrach
-version: 1.0
+version: 1.1
 
 options: gmem=LM_Core_GainLink
 
@@ -247,7 +247,8 @@ out_pin:Ref Output R
       ) : ( 
           // RECEIVER
           is_embedded ? (
-             (mouse_x <= 50) ? (slider2 = 1 - slider2; slider_automate(slider2););
+             (mouse_x <= 22) ? (slider2 = 1 - slider2; slider_automate(slider2);)
+                             : (slider5 = (slider5 + 1) % 3; slider_automate(slider5););
           ) : (
              (mouse_y > 180 && mouse_y < 210) ? (
                  (mouse_x < 90) ? (slider2 = 1 - slider2; slider_automate(slider2););
@@ -429,11 +430,24 @@ out_pin:Ref Output R
           (clamp_len < 0) ? gfx_rect(bar_mid_x + clamp_len, bar_y, abs(clamp_len), bar_h) : gfx_rect(bar_mid_x, bar_y, clamp_len, bar_h);
           gfx_set(1,1,1,0.5); gfx_line(bar_mid_x, bar_y, bar_mid_x, gfx_h); 
 
-          text_area_h = gfx_h - bar_h; is_centered ? gfx_set(0, 1, 0, 1) : ((display_db > 0) ? gfx_set(1, 0.5, 0.2, 1) : gfx_set(0.4, 0.7, 1, 1));
+          text_area_h = gfx_h - bar_h; 
+          
+          // --- ALGO STRING DRAW ---
+          (slider5 == 0) ? a_str="RMS" : (slider5 == 1) ? a_str="NULL" : a_str="LUFS";
+          gfx_set(1, 1, 1, 0.7); 
+          algo_fs = text_area_h * 0.35; 
+          gfx_setfont(1, "Arial", algo_fs, 'b');
+          gfx_measurestr(a_str, aw, ah);
+          gfx_x = disp_x + (disp_w - aw)/2; gfx_y = (text_area_h * 0.3) - (ah/2);
+          (gfx_y < 0) ? gfx_y = 0;
+          gfx_drawstr(a_str);
+          
+          // --- VALUE DRAW ---
+          is_centered ? gfx_set(0, 1, 0, 1) : ((display_db > 0) ? gfx_set(1, 0.5, 0.2, 1) : gfx_set(0.4, 0.7, 1, 1));
           str_val = ""; (display_db > 0.05) ? str_val = sprintf(#, "+%.1f", display_db); (display_db < -0.05) ? str_val = sprintf(#, "%.1f", display_db); is_centered ? str_val = "MATCH"; 
-          font_size = text_area_h * 0.9; gfx_setfont(1, "Arial", font_size, 'b'); gfx_measurestr(str_val, tw, th);
+          font_size = text_area_h * 0.55; gfx_setfont(1, "Arial", font_size, 'b'); gfx_measurestr(str_val, tw, th);
           (tw > disp_w - 4) ? (ratio = (disp_w - 6) / tw; font_size = font_size * ratio; gfx_setfont(1, "Arial", font_size, 'b'); gfx_measurestr(str_val, tw, th););
-          gfx_x = disp_x + (disp_w - tw)/2; gfx_y = (text_area_h - th)/2; gfx_drawstr(str_val);
+          gfx_x = disp_x + (disp_w - tw)/2; gfx_y = (text_area_h * 0.7) - (th/2); gfx_drawstr(str_val);
       ) : (
           // Full Receiver
           
@@ -480,3 +494,4 @@ out_pin:Ref Output R
           (algo==0)?gfx_drawstr("[Algorithm: Energy RMS]") : (algo==1)?gfx_drawstr("[Algorithm: Null Hunter]") : gfx_drawstr("[Algorithm: Perceptual LUFS]");
       );
   );
+
