@@ -1,6 +1,6 @@
 desc: LevelMatch Core (DocShadrach)
 author: DocShadrach
-version: 1.1
+version: 1.2
 
 options: gmem=LM_Core_GainLink
 
@@ -12,7 +12,7 @@ slider1:0<0,1,1{Sender (Start),Receiver (End)}>Mode
 slider2:0<0,1,1{Off,On}>Auto-Match Active
 slider3:0<0,2,1{FX (Wet),Reference (Dry),DELTA}>Monitor Source
 slider4:10<10,500,1>Reaction Time (ms)
-slider5:1<0,2,1{Energy Match (RMS),Null Hunter,Perceptual (LUFS)}>Algorithm
+slider5:2<0,2,1{Energy Match (RMS),Null Hunter,Perceptual (LUFS)}>Algorithm
 slider6:0.0<-60,12,0.1>Offset Diff (dB)
 
 // We keep this separator to indicate where common/sender controls start
@@ -199,6 +199,7 @@ out_pin:Ref Output R
   );
 
 @gfx 360 280
+  mode = 1 - slider1;
   gfx_set(0.15,0.15,0.17,1); gfx_rect(0,0,gfx_w,gfx_h);
 
   // -----------------------------------------------------------------------
@@ -494,4 +495,5 @@ out_pin:Ref Output R
           (algo==0)?gfx_drawstr("[Algorithm: Energy RMS]") : (algo==1)?gfx_drawstr("[Algorithm: Null Hunter]") : gfx_drawstr("[Algorithm: Perceptual LUFS]");
       );
   );
+
 
