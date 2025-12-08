@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="06208405366cc32856b94529990dc9d2906bcec7">
+<index version="1" name="DocShadrach FXs" commit="aa7eb9593bbbe032d5061fa5f90ac754c47fa4f2">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -40,6 +40,23 @@ A measurement tool that helps to match gain stages.
     <version name="1.2.0" author="Doc Shadrach" time="2025-12-03T07:00:00Z">
      <changelog><![CDATA[Bug fix and LUFS as Default.]]></changelog>
     <source file="LevelMatch_Core.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/06208405366cc32856b94529990dc9d2906bcec7/LevelMatch_Core.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="V-Clamp.jsfx" type="effect" desc="V-Clamp (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+V-Clamp
+======================
+Author: Doc Shadrach
+
+A sender/receiver wrapper for Neural Amp Modeler in REAPER.
+Features asymmetric push/pull drive, component drift, and crosstalk to humanize mono captures.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-08T07:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="V-Clamp.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/aa7eb9593bbbe032d5061fa5f90ac754c47fa4f2/V-Clamp.jsfx</source>
     </version>
     </reapack>
  </category>
