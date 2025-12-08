@@ -1,0 +1,342 @@
+desc: V-Clamp (DocShadrach)
+// v1.0
+// Features: Push/Pull Gain, Component Aging, Capacitive Crosstalk, 
+// Asymmetrical L/R filters, and ID-based Randomization.
+
+// --- PIN DEFINITIONS ---
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+options:gmem=AnalogSauceLink
+
+// --- CONTROLS ---
+slider1:0<0,1,1{SENDER (Pre-Sauce),RECEIVER (Post-Sauce)}>Mode
+slider2:1<1,32,1>Link ID
+slider3:4<0,4,1{Subtle (L+0.5 / R-0.5),Medium (L+1.0 / R-0.5),Tape Asym (L+1.5 / R-1.0),Aggressive (L+3.0 / R-2.0),Custom}>Profile
+slider4:0<-12,12,0.1>Custom Push L (dB)
+slider5:0<-12,12,0.1>Custom Push R (dB)
+slider6:0<-12,12,0.1>Input Drive (dB)
+slider7:0<-3,3,0.1>Output Trim (Level Match)
+slider8:0<0,100,1>Analog Flavor (Mint -> Vintage)
+
+@init
+my_uuid = floor(rand(10000000)) + 1;
+
+function update_memory_offset() (
+  offset = slider2 * 1000;
+);
+
+smooth_coeff = exp(-1/(srate*0.02));
+current_gainL = 1.0;
+current_gainR = 1.0;
+
+// Filter States
+lpL = 0; lpR = 0;
+hpL = 0; hpR = 0;
+xtalk_hp_L = 0; xtalk_hp_R = 0;
+
+grace_period = 15; 
+conflict_state = 0;
+reqL = 0; reqR = 0;
+
+@slider
+update_memory_offset();
+
+// ---------------------------------------------------------------------
+// VISIBILITY LOGIC (Smart UI)
+// ---------------------------------------------------------------------
+// 1. Read Mode
+is_sender = (slider1 == 0); 
+is_custom_profile = (slider3 == 4);
+
+// 2. Main Controls Visibility (Hidden in Receiver)
+slider_show(slider3, is_sender); // Profile
+slider_show(slider6, is_sender); // Drive
+slider_show(slider7, is_sender); // Trim
+slider_show(slider8, is_sender); // Flavor
+
+// 3. Custom Sliders Visibility (Sender + Custom only)
+show_custom_sliders = is_sender && is_custom_profile;
+slider_show(slider4, show_custom_sliders);
+slider_show(slider5, show_custom_sliders);
+
+// ---------------------------------------------------------------------
+// ASSIGN VARIABLES
+// ---------------------------------------------------------------------
+mode = slider1;
+linkID = slider2;
+profile = slider3;
+customL = slider4;
+customR = slider5;
+drive_db = slider6;
+lvl_match = slider7;
+flavor = slider8; // Renamed from condition
+
+// --- PROFILE VALUES ---
+is_custom_profile ? (
+  reqL = customL; 
+  reqR = customR;
+) : (
+  profile == 0 ? ( reqL = 0.5; reqR = -0.5; );
+  profile == 1 ? ( reqL = 1.0; reqR = -0.5; );
+  profile == 2 ? ( reqL = 1.5; reqR = -1.0; );
+  profile == 3 ? ( reqL = 3.0; reqR = -2.0; );
+);
+
+// --- PHYSICS CALCS (The "Sauce") ---
+// 0-100% mapped to 0.0-1.0
+age = flavor / 100;
+
+// Random Seed based on LinkID (Deterministic Chaos)
+seed = linkID * 53.2; 
+randL = sin(seed);
+randR = cos(seed);
+
+// Filter Calculations (Asymmetrical Aging)
+freq_lp_base = 25000 - (age * 9000); // Drops to ~16k at max
+freq_hp_base = 10 + (age * 30);      // Rises to ~40Hz at max
+
+// Apply Random Deviation per channel
+freq_lp_L = freq_lp_base + (randL * age * 1500);
+freq_lp_R = freq_lp_base + (randR * age * 1500);
+freq_hp_L = freq_hp_base + (randL * age * 10);
+freq_hp_R = freq_hp_base + (randR * age * 10);
+
+// Filter Coefficients
+coeff_lp_L = 1 - exp(-2 * $pi * freq_lp_L / srate);
+coeff_lp_R = 1 - exp(-2 * $pi * freq_lp_R / srate);
+coeff_hp_L = exp(-2 * $pi * freq_hp_L / srate);
+coeff_hp_R = exp(-2 * $pi * freq_hp_R / srate);
+
+// Crosstalk Calculations (Capacitive Bleed)
+// Exponential curve: Subtle at 30%, Noticeable at 80%
+xtalk_amt = (age * age * age) * 0.0035; 
+xtalk_freq = 3000; // Only High Freqs bleed
+coeff_xtalk = exp(-2 * $pi * xtalk_freq / srate); 
+
+@block
+update_memory_offset();
+now = time_precise();
+
+mode == 0 ? (
+  // --- SENDER LOGIC ---
+  grace_period > 0 ? grace_period -= 1;
+  stored_uuid = gmem[offset+10];
+  last_seen   = gmem[offset+11];
+  is_stale    = (now - last_seen) > 0.3;
+
+  (grace_period > 0 || stored_uuid == my_uuid || stored_uuid == 0 || is_stale) ? (
+      conflict_state = 0;
+      gmem[offset+10] = my_uuid;
+      gmem[offset+11] = now;
+      
+      totalL = reqL + drive_db;
+      totalR = reqR + drive_db;
+      
+      gmem[offset] = totalL;
+      gmem[offset+1] = totalR;
+      gmem[offset+2] = 1.0; // Heartbeat
+      gmem[offset+3] = lvl_match;
+      gmem[offset+4] = age; // Send Flavor to Receiver
+      
+      applyL = totalL;
+      applyR = totalR;
+  ) : (
+      conflict_state = 1;
+      applyL = 0; applyR = 0;
+  );
+) : (
+  // --- RECEIVER LOGIC ---
+  conflict_state = 0;
+  sender_active = gmem[offset+2];
+  gmem[offset+2] = 0.0; 
+  
+  sender_active > 0.5 ? (
+    remoteL = gmem[offset];
+    remoteR = gmem[offset+1];
+    match_val = gmem[offset+3];
+    remote_age = gmem[offset+4]; 
+    
+    applyL = -remoteL + match_val;
+    applyR = -remoteR + match_val;
+    
+    // Update local xtalk var from remote age
+    xtalk_amt = (remote_age * remote_age * remote_age) * 0.0035;
+  ) : (
+    applyL = 0.0; applyR = 0.0;
+    xtalk_amt = 0;
+  );
+);
+
+target_gain_lin_L = 10 ^ (applyL / 20);
+target_gain_lin_R = 10 ^ (applyR / 20);
+
+@sample
+// 1. GAIN SMOOTHING (Anti-Click)
+current_gainL = (current_gainL * smooth_coeff) + (target_gain_lin_L * (1.0 - smooth_coeff));
+current_gainR = (current_gainR * smooth_coeff) + (target_gain_lin_R * (1.0 - smooth_coeff));
+
+mode == 0 ? (
+  // --- SENDER PROCESSING ---
+  
+  // TRUE BYPASS CHECK: If Flavor is 0, skip DSP
+  age > 0.001 ? (
+      // 1. Asym High Pass (DC Removal + Phase Shift)
+      hpL = spl0 - (spl0 - hpL) * coeff_hp_L;
+      spl0 = spl0 - hpL;
+      hpR = spl1 - (spl1 - hpR) * coeff_hp_R;
+      spl1 = spl1 - hpR;
+
+      // 2. Asym Low Pass (Slew Rate Limiting / Warmth)
+      lpL += (spl0 - lpL) * coeff_lp_L;
+      spl0 = lpL;
+      lpR += (spl1 - lpR) * coeff_lp_R;
+      spl1 = lpR;
+  );
+  
+  // 3. Apply Push Gain
+  spl0 *= current_gainL;
+  spl1 *= current_gainR;
+  
+) : (
+  // --- RECEIVER PROCESSING ---
+  
+  // 1. Apply Pull Gain First
+  spl0 *= current_gainL;
+  spl1 *= current_gainR;
+
+  // TRUE BYPASS CHECK
+  xtalk_amt > 0.000001 ? (
+      // 2. Capacitive Crosstalk
+      // Extract High Freqs from L
+      xtalk_hp_L = xtalk_hp_L * coeff_xtalk + spl0 * (1 - coeff_xtalk);
+      bleed_L = spl0 - xtalk_hp_L; 
+      
+      // Extract High Freqs from R
+      xtalk_hp_R = xtalk_hp_R * coeff_xtalk + spl1 * (1 - coeff_xtalk);
+      bleed_R = spl1 - xtalk_hp_R; 
+      
+      // Mix bleed crosswise
+      spl0 += bleed_R * xtalk_amt;
+      spl1 += bleed_L * xtalk_amt;
+  );
+);
+
+@gfx 360 210
+gfx_clear = 0x202020; 
+
+// --- COLORS ---
+conflict_state == 1 ? (
+  main_r=1; main_g=0.2; main_b=0.2; 
+  status_txt = "CONFLICT DETECTED";
+) : (
+  mode == 0 ? (
+    main_r=1; main_g=0.5; main_b=0.2; // ORANGE for "Analog Sauce" Sender
+    status_txt = "SENDER (MASTER)";
+  ) : (
+    sender_active > 0.5 ? (
+      main_r=0.2; main_g=0.8; main_b=1; // CYAN for "Analog Sauce" Receiver
+      status_txt = "RECEIVER (LINKED)";
+    ) : (
+      main_r=0.5; main_g=0.5; main_b=0.5; 
+      status_txt = "RECEIVER (WAITING)";
+    )
+  )
+);
+
+gfx_setfont(1, "Arial", 13);
+gfx_setfont(2, "Arial", 28, 'b');
+gfx_setfont(3, "Arial", 70, 'b');
+gfx_setfont(4, "Arial", 16, 'b');
+
+// Panels
+gfx_set(0.18, 0.18, 0.18, 1);
+gfx_rect(10, 10, 230, 190, 1); 
+gfx_set(0.12, 0.12, 0.12, 1);
+gfx_rect(250, 10, 100, 190, 1);
+
+// ID Display
+conflict_state == 1 ? gfx_set(1,0,0,1) : gfx_set(1, 0.8, 0.2, 0.9);
+gfx_setfont(3);
+str_w=0; str_h=0;
+gfx_measurestr(sprintf(#, "%d", linkID), str_w, str_h);
+gfx_x = 250 + (100 - str_w)/2;
+gfx_y = 10 + (190 - str_h)/2;
+gfx_printf("%d", linkID);
+
+// ID Label
+gfx_setfont(1);
+gfx_set(1,1,1,0.4);
+gfx_measurestr("LINK ID", str_w, str_h);
+gfx_x = 250 + (100 - str_w)/2;
+gfx_y = 160;
+gfx_drawstr("LINK ID");
+
+// LED
+gfx_x = 25; gfx_y = 25;
+gfx_set(main_r, main_g, main_b, 1);
+gfx_circle(30, 32, 6, 1);
+gfx_x = 45; gfx_y = 23;
+gfx_setfont(4);
+gfx_drawstr(status_txt);
+
+// --- FLAVOR INDICATOR (Sender Only) ---
+mode == 0 && conflict_state == 0 ? (
+  gfx_setfont(1);
+  gfx_x = 25; gfx_y = 50;
+  
+  // Calculate Year based on flavor
+  year = 2025 - (flavor * 0.55); 
+  
+  gfx_set(1,1,1,0.7);
+  gfx_printf("ANALOG FLAVOR: %d%%", flavor);
+  
+  gfx_x = 180; 
+  flavor == 0 ? gfx_set(0.6, 1, 1, 1) : gfx_set(1, 0.7, 0.4, 1);
+  gfx_printf("(ca. %d)", year);
+  
+  // Bar
+  gfx_set(0.4, 0.4, 0.4, 1);
+  gfx_rect(25, 65, 200, 4, 1);
+  gfx_set(main_r, main_g, main_b, 0.8);
+  gfx_rect(25, 65, flavor*2, 4, 1);
+);
+
+// --- DRIVE & TRIM INDICATORS ---
+mode == 0 && conflict_state == 0 ? (
+  gfx_setfont(1);
+  
+  // DRIVE
+  gfx_x = 25; gfx_y = 85;
+  abs(drive_db) > 0.01 ? gfx_set(1, 0.8, 0.2, 1) : gfx_set(1,1,1,0.5);
+  gfx_printf("DRIVE: %+.1f dB", drive_db);
+  
+  // MATCH
+  gfx_x = 135; 
+  abs(lvl_match) > 0.01 ? gfx_set(0.2, 0.8, 1, 1) : gfx_set(1,1,1,0.5);
+  gfx_printf("TRIM: %+.1f dB", lvl_match);
+);
+
+// Main Values
+conflict_state == 1 ? (
+  gfx_set(1, 0.5, 0.5, 1);
+  gfx_setfont(1);
+  gfx_x = 25; gfx_y = 110;
+  gfx_drawstr("ID Collision Detected.");
+) : (
+  gfx_set(0,0,0,0.6);
+  gfx_rect(25, 110, 200, 30, 1);
+  gfx_rect(25, 150, 200, 30, 1);
+  
+  gfx_setfont(2);
+  gfx_set(1,1,1,0.9);
+  gfx_x = 35; gfx_y = 112;
+  gfx_printf("L: %+.1f dB", applyL);
+  gfx_x = 35; gfx_y = 152;
+  gfx_printf("R: %+.1f dB", applyR);
+);
+
+gfx_set(main_r, main_g, main_b, 0.3);
+gfx_rect(10, 10, 230, 190, 0);
