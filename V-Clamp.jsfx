@@ -1,7 +1,9 @@
 desc: V-Clamp (DocShadrach)
-// v1.0
+// v1.1
 // Features: Push/Pull Gain, Component Aging, Capacitive Crosstalk, 
 // Asymmetrical L/R filters, and ID-based Randomization.
+
+// Changelog 1.1: Added component drift (gain fluctuation) with DC Blocker.
 
 // --- PIN DEFINITIONS ---
 in_pin:left input
@@ -36,10 +38,21 @@ current_gainR = 1.0;
 lpL = 0; lpR = 0;
 hpL = 0; hpR = 0;
 xtalk_hp_L = 0; xtalk_hp_R = 0;
+// Receiver DC Block States
+rec_dc_l = 0; rec_dc_r = 0;
 
 grace_period = 15; 
 conflict_state = 0;
 reqL = 0; reqR = 0;
+
+// --- DRIFT VARIABLES ---
+// Smoothing coeff for drift (approx 300ms for slow thermal breathing)
+drift_smooth_coeff = exp(-1/(srate*0.3)); 
+drift_timer = 0;
+target_drift_L = 0;
+target_drift_R = 0;
+curr_drift_db_L = 0;
+curr_drift_db_R = 0;
 
 @slider
 update_memory_offset();
@@ -72,7 +85,7 @@ customL = slider4;
 customR = slider5;
 drive_db = slider6;
 lvl_match = slider7;
-flavor = slider8; // Renamed from condition
+flavor = slider8; 
 
 // --- PROFILE VALUES ---
 is_custom_profile ? (
@@ -89,7 +102,10 @@ is_custom_profile ? (
 // 0-100% mapped to 0.0-1.0
 age = flavor / 100;
 
-// Random Seed based on LinkID (Deterministic Chaos)
+// Drift Max Scale (At max vintage, +/- 0.25dB)
+drift_scale = age * 0.25;
+
+// Random Seed based on LinkID (Deterministic Chaos for filters only)
 seed = linkID * 53.2; 
 randL = sin(seed);
 randR = cos(seed);
@@ -164,9 +180,14 @@ mode == 0 ? (
     
     // Update local xtalk var from remote age
     xtalk_amt = (remote_age * remote_age * remote_age) * 0.0035;
+    
+    // Update drift scale from remote age (so receiver drifts too if age is sent)
+    drift_scale = remote_age * 0.25;
+    
   ) : (
     applyL = 0.0; applyR = 0.0;
     xtalk_amt = 0;
+    drift_scale = 0; // No drift if not linked/active
   );
 );
 
@@ -203,6 +224,14 @@ mode == 0 ? (
 ) : (
   // --- RECEIVER PROCESSING ---
   
+  // 0. Safety DC Blocker (ONLY ACTIVE IF DRIFT IS ON)
+  drift_scale > 0.001 ? (
+      rec_dc_l = spl0 * 0.0005 + rec_dc_l * 0.9995;
+      spl0 -= rec_dc_l;
+      rec_dc_r = spl1 * 0.0005 + rec_dc_r * 0.9995;
+      spl1 -= rec_dc_r;
+  );
+  
   // 1. Apply Pull Gain First
   spl0 *= current_gainL;
   spl1 *= current_gainR;
@@ -222,6 +251,27 @@ mode == 0 ? (
       spl0 += bleed_R * xtalk_amt;
       spl1 += bleed_L * xtalk_amt;
   );
+);
+
+// --- COMPONENT DRIFT LOGIC (Applies to both Sender and Receiver) ---
+drift_scale > 0.001 ? (
+    drift_timer -= 1;
+    drift_timer <= 0 ? (
+        // Pick new random targets (-1 to 1 * scale)
+        target_drift_L = (rand(2) - 1) * drift_scale;
+        target_drift_R = (rand(2) - 1) * drift_scale;
+        
+        // Reset timer (random interval between 0.5s and 2s approx)
+        drift_timer = srate * (0.5 + rand(1.5));
+    );
+
+    // Smooth transition (Attack/Release simulation)
+    curr_drift_db_L += (target_drift_L - curr_drift_db_L) * (1 - drift_smooth_coeff);
+    curr_drift_db_R += (target_drift_R - curr_drift_db_R) * (1 - drift_smooth_coeff);
+    
+    // Apply Drift Gain
+    spl0 *= 10 ^ (curr_drift_db_L / 20);
+    spl1 *= 10 ^ (curr_drift_db_R / 20);
 );
 
 @gfx 360 210
@@ -333,6 +383,7 @@ conflict_state == 1 ? (
   gfx_setfont(2);
   gfx_set(1,1,1,0.9);
   gfx_x = 35; gfx_y = 112;
+  // We show the static requested gain, not the drift, to keep UI clean
   gfx_printf("L: %+.1f dB", applyL);
   gfx_x = 35; gfx_y = 152;
   gfx_printf("R: %+.1f dB", applyR);
