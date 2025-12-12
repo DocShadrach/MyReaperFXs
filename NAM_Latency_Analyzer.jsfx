@@ -1,0 +1,171 @@
+desc: NAM Latency Analyzer (DocShadrach)
+// Author: Doc Shadrach
+// Version: 1.0
+// Mode: Channel 1 (Left) = DRY / Channel 2 (Right) = WET
+// Usage: 1. Generate a Click Source track. 2. Route NAM just to the Right channel. 3. Arm. 4. Play. 5. COPY.
+
+options:gmem=NAMLinkData
+
+slider1:0<0,1,1{Stopped,Armed}>Arm Analysis
+slider2:2000<10,5000,1>Max Scan Range (Samples)
+slider3:0<0,4000,1>Detected Latency (Samples)
+slider4:0<0,2,1{Input (Split),Center (Mono Sum),Diff (Null Check)}>Monitor Mode
+slider5:0<-4000,0,1>RESULT: Time Adj (Samples)
+slider6:0<-12,12,0.01>RESULT: Gain Diff (dB)
+
+in_pin:Channel 1 (Dry)
+in_pin:Channel 2 (Wet)
+out_pin:Left
+out_pin:Right
+
+@init
+buf_len = 16384; 
+buf_dry = 0;
+buf_wet = buf_len;
+
+state = 0; 
+rec_pos = 0;
+threshold = 10 ^ (-40 / 20); 
+
+best_offset = 0;
+best_gain_db = 0;
+blink_timer = 0;
+copy_anim = 0; // Timer for "Copied!" text
+
+@slider
+slider1 == 0 ? ( state = 0; rec_pos = 0; );
+slider1 == 1 && state == 0 ? ( state = 1; rec_pos = 0; );
+
+@block
+// Reset logic
+
+@sample
+dry_sig = spl0; wet_sig = spl1;
+
+// --- STATE MACHINE ---
+state == 1 ? ( (abs(dry_sig) > threshold || abs(wet_sig) > threshold) ? state = 2; );
+state == 2 ? (
+  buf_dry[rec_pos] = dry_sig;
+  buf_wet[rec_pos] = wet_sig;
+  rec_pos += 1;
+  rec_pos >= buf_len ? ( state = 3; slider1 = 0; );
+);
+
+// --- MONITORING ---
+slider4 == 0 ? ( outL = dry_sig; outR = wet_sig; );
+slider4 == 1 ? ( sum = (dry_sig + wet_sig)*0.5; outL = sum; outR = sum; );
+slider4 == 2 ? ( diff = dry_sig - wet_sig; outL = diff; outR = diff; );
+spl0 = outL; spl1 = outR;
+
+@gfx 400 320
+// --- COLORS ---
+bg_r=0.15; bg_g=0.15; bg_b=0.16;
+txt_r=0.9; txt_g=0.9; txt_b=0.9;
+accent_r=0.3; accent_g=0.7; accent_b=1.0; 
+warn_r=1.0; warn_g=0.3; warn_b=0.3; 
+success_r=0.3; success_g=0.9; success_b=0.4; 
+btn_r=0.4; btn_g=0.4; btn_b=0.4;
+
+gfx_set(bg_r, bg_g, bg_b, 1);
+gfx_rect(0,0,400,320,1);
+
+// Fonts
+gfx_setfont(1, "Arial", 16, 'b'); 
+gfx_setfont(2, "Arial", 26, 'b'); 
+gfx_setfont(3, "Arial", 13, 0);   
+
+// --- HEADER ---
+gfx_set(1,1,1,0.1); gfx_rect(0,0,400,40,1); 
+gfx_set(txt_r, txt_g, txt_b, 1); gfx_setfont(1);
+str_hdr = "NAM LATENCY ANALYZER";
+gfx_measurestr(str_hdr, w, h);
+gfx_x = (400 - w)/2; gfx_y = 12;
+gfx_drawstr(str_hdr);
+
+// --- ANALYSIS LOGIC ---
+state == 3 ? (
+  min_err = 100000000000.0; best_off = 0; off = 0;
+  loop(slider2,
+    err_sum = 0; i = 100; len = buf_len - slider2 - 200;
+    loop(len, d = buf_wet[i] - buf_dry[i - off]; err_sum += abs(d); i += 1; );
+    err_sum < min_err ? ( min_err = err_sum; best_off = off; );
+    off += 1;
+  );
+  min_gain_err = 100000000000.0; best_g = 0; scan_db = -12.0;
+  loop(480,
+     lin = 10 ^ (scan_db / 20); err_sum = 0; i = best_off + 100; len = buf_len - best_off - 200;
+     loop(len, d = (buf_wet[i] * lin) - buf_dry[i - best_off]; err_sum += abs(d); i += 1; );
+     err_sum < min_gain_err ? ( min_gain_err = err_sum; best_g = scan_db; );
+     scan_db += 0.05;
+  );
+  slider3 = best_off; slider5 = -best_off; slider6 = -best_g;
+  state = 0; detected = 1;
+);
+
+// --- STATUS BOX ---
+gfx_y = 60; rect_h = 50; rect_w = 360; rect_x = (400 - rect_w)/2;
+state == 0 ? ( detected == 1 ? gfx_set(success_r, success_g, success_b, 0.2) : gfx_set(1,1,1,0.1); );
+state == 1 ? ( 
+  blink_timer += 1; blink_timer > 15 ? blink_timer = 0;
+  blink_timer < 8 ? gfx_set(warn_r, warn_g, warn_b, 0.3) : gfx_set(warn_r, warn_g, warn_b, 0.1);
+);
+state == 2 ? gfx_set(1, 0.5, 0.0, 0.4); 
+gfx_rect(rect_x, gfx_y, rect_w, rect_h, 1);
+
+gfx_setfont(2);
+state == 0 ? ( detected == 1 ? ( gfx_set(success_r, success_g, success_b, 1); str_stat = "ANALYSIS COMPLETE"; ) : ( gfx_set(txt_r, txt_g, txt_b, 0.5); str_stat = "READY TO ARM"; ) );
+state == 1 ? ( gfx_set(warn_r, warn_g, warn_b, 1); str_stat = "WAITING FOR SIGNAL..."; );
+state == 2 ? ( gfx_set(1, 0.8, 0.5, 1); str_stat = "RECORDING..."; );
+gfx_measurestr(str_stat, w, h);
+gfx_x = (400 - w)/2; gfx_y = 60 + (50 - h)/2;
+gfx_drawstr(str_stat);
+
+// --- RESULTS ---
+gfx_y = 130;
+// Panel 1
+gfx_set(1,1,1,0.05); gfx_rect(20, 130, 170, 70, 1);
+gfx_setfont(3); gfx_set(txt_r, txt_g, txt_b, 0.6);
+str_lbl1 = "TIME ADJ:"; gfx_measurestr(str_lbl1, w, h); gfx_x = 20 + (170-w)/2; gfx_y = 140; gfx_drawstr(str_lbl1);
+gfx_setfont(2); gfx_set(accent_r, accent_g, accent_b, 1);
+sprintf(1, "%d spls", slider5); gfx_measurestr(1, w, h); gfx_x = 20 + (170-w)/2; gfx_y = 160; gfx_drawstr(1);
+
+// Panel 2
+gfx_set(1,1,1,0.05); gfx_rect(210, 130, 170, 70, 1);
+gfx_setfont(3); gfx_set(txt_r, txt_g, txt_b, 0.6);
+str_lbl2 = "OUTPUT TRIM:"; gfx_measurestr(str_lbl2, w, h); gfx_x = 210 + (170-w)/2; gfx_y = 140; gfx_drawstr(str_lbl2);
+gfx_setfont(2); gfx_set(accent_r, accent_g, accent_b, 1);
+sprintf(2, "%+.2f dB", slider6); gfx_measurestr(2, w, h); gfx_x = 210 + (170-w)/2; gfx_y = 160; gfx_drawstr(2);
+
+// --- COPY BUTTON (ONLY SHOWS IF DETECTED) ---
+detected == 1 ? (
+  btn_x = 100; btn_y = 220; btn_w = 200; btn_h = 40;
+  
+  // Logic
+  mouse_cap == 1 && mouse_x > btn_x && mouse_x < btn_x+btn_w && mouse_y > btn_y && mouse_y < btn_y+btn_h ? (
+    gmem[0] = slider5; // Copy Time
+    gmem[1] = slider6; // Copy Gain
+    copy_anim = 30;    // Trigger animation
+  );
+
+  // Draw Button
+  copy_anim > 0 ? (
+    gfx_set(success_r, success_g, success_b, 1); // Green
+    str_btn = "COPIED!";
+    copy_anim -= 1;
+  ) : (
+    gfx_set(1, 1, 1, 0.2); // Normal
+    str_btn = "COPY PARAMETERS";
+  );
+  
+  gfx_rect(btn_x, btn_y, btn_w, btn_h, 1);
+  
+  gfx_setfont(1); gfx_set(0,0,0,1);
+  gfx_measurestr(str_btn, w, h);
+  gfx_x = btn_x + (btn_w-w)/2; gfx_y = btn_y + (btn_h-h)/2;
+  gfx_drawstr(str_btn);
+);
+
+// --- FOOTER ---
+gfx_setfont(3); gfx_set(1,1,1,0.3); gfx_y = 280;
+str_foot = "Setup: Keep the LEFT dry (Ch1) and route NAM just to RIGHT (Ch2)";
+gfx_measurestr(str_foot, w, h); gfx_x = (400 - w)/2; gfx_drawstr(str_foot);
