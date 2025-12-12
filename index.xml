@@ -96,7 +96,7 @@ An utility to detect the amount of latency in NAM captures.
      </metadata>
     <version name="1.0.0" author="Doc Shadrach" time="2025-12-12T07:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
-    <source file="NAM_Latency_Analyzer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/57f387f7c440f7ea4cfa9acdc82ed056754cf360/NAM_Latency_Analyzer.jsfx/source>
+    <source file="NAM_Latency_Analyzer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/57f387f7c440f7ea4cfa9acdc82ed056754cf360/NAM_Latency_Analyzer.jsfx</source>
     </version>
     </reapack>
  </category>
