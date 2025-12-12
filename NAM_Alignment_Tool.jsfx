@@ -1,14 +1,13 @@
 desc: NAM Alignment Tool (DocShadrach)
 // Author: Doc Shadrach
-// Version: 1.0
-// Range: 0 to -150 samples | Trim: +/- 5dB
+// Version: 1.1
+// Range: 0 to -150 samples
 // Includes "Paste" button to get data from NAM Latency Analyzer
 
 options:gmem=NAMLinkData
 
 // CONFIGURACIÓN SIMPLIFICADA
 slider1:0<-150,0,1>Time Shift (samples)
-slider2:0<-5,5,0.05>Output Trim (dB)
 
 in_pin:left input
 in_pin:right input
@@ -19,16 +18,16 @@ out_pin:right output
 paste_anim = 0;
 
 @slider
-gain = 10 ^ (slider2 / 20);
-
 // Lógica PDC directa
 pdc_delay = -slider1;
 pdc_bot_ch = 0;
 pdc_top_ch = 2;
 
 @sample
-spl0 *= gain;
-spl1 *= gain;
+// No processing needed, PDC handles the delay reporting
+// Pass-through audio
+spl0 = spl0;
+spl1 = spl1;
 
 @gfx 400 220
 // --- COLORS ---
@@ -57,40 +56,27 @@ gfx_drawstr(str_hdr);
 gfx_y = 60;
 
 // Panel 1: Time Shift 
-gfx_set(1,1,1,0.05); gfx_rect(20, 60, 170, 80, 1); 
+// Centered slightly better since Panel 2 is gone
+gfx_set(1,1,1,0.05); gfx_rect(115, 60, 170, 80, 1); 
 gfx_setfont(3); gfx_set(txt_r, txt_g, txt_b, 0.6);
-str_lbl1 = "TIME SHIFT:"; gfx_measurestr(str_lbl1, w, h); gfx_x = 20 + (170-w)/2; gfx_y = 70; gfx_drawstr(str_lbl1);
+str_lbl1 = "TIME SHIFT:"; gfx_measurestr(str_lbl1, w, h); gfx_x = 115 + (170-w)/2; gfx_y = 70; gfx_drawstr(str_lbl1);
 
 gfx_setfont(2); gfx_set(accent_r, accent_g, accent_b, 1);
 sprintf(1, "%d spls", slider1);
-gfx_measurestr(1, w, h); gfx_x = 20 + (170-w)/2; gfx_y = 95; gfx_drawstr(1);
-
-// Panel 2: Output Trim 
-gfx_set(1,1,1,0.05); gfx_rect(210, 60, 170, 80, 1); 
-gfx_setfont(3); gfx_set(txt_r, txt_g, txt_b, 0.6);
-str_lbl2 = "OUTPUT TRIM:"; gfx_measurestr(str_lbl2, w, h); gfx_x = 210 + (170-w)/2; gfx_y = 70; gfx_drawstr(str_lbl2);
-
-gfx_setfont(2); gfx_set(accent_r, accent_g, accent_b, 1);
-sprintf(2, "%+.2f dB", slider2);
-gfx_measurestr(2, w, h); gfx_x = 210 + (170-w)/2; gfx_y = 95; gfx_drawstr(2);
+gfx_measurestr(1, w, h); gfx_x = 115 + (170-w)/2; gfx_y = 95; gfx_drawstr(1);
 
 // --- PASTE BUTTON ---
 btn_w = 240; btn_h = 40; btn_x = (400 - btn_w)/2; btn_y = 160;
 
 mouse_cap == 1 && mouse_x > btn_x && mouse_x < btn_x+btn_w && mouse_y > btn_y && mouse_y < btn_y+btn_h ? (
   val_time = gmem[0];
-  val_gain = gmem[1];
   
   // Limitar al máximo del slider (-150)
   val_time < -150 ? val_time = -150;
   
-  // Limitar Ganancia
-  val_gain > 5 ? val_gain = 5; val_gain < -5 ? val_gain = -5;
-
   slider1 = val_time;
-  slider2 = val_gain;
   
-  slider_automate(slider1); slider_automate(slider2);
+  slider_automate(slider1);
   paste_anim = 30;
 );
 
