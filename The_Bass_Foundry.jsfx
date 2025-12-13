@@ -1,0 +1,588 @@
+desc: The Bass Foundry (DocShadrach)
+// Author: Doc Shadrach
+// Version: 1.0
+
+// --- CONTROLS ---
+slider1:input_db=20<0,40,0.1>Input Drive (dB)
+slider2:xover_freq=200<60,500,5>Crossover Freq (Hz)
+
+// --- IRON CORE (Simplified) ---
+slider3:hb_drive=0.0<0,1,0.01>IRON Core (Drive)
+slider4:hb_pos_pct=50<0,100,0.1>IRON Position (%)
+
+slider5:magma_amt=70<0,100,0.1>MAGMA (Harmonics %)
+slider6:flux_amt=60<0,100,0.1>FLUX (Transient Soften %)
+slider7:low_mode=0<0,1,1{Clean (Body),Saturated (Growl)}>Low End Mode
+slider8:sat_mix=100<0,100,0.1>Saturation Mix %
+slider9:air_amt=0<0,100,0.1>3D Air
+slider10:ceiling_db=-0.1<-6,0,0.1>Safety Ceiling (dB)
+
+// TONE SHAPE (Tape Contour)
+slider11:shape_amt=0<0,100,0.1>Tone Shaper
+slider12:output_trim=0<-10,10,0.1>Output Trim
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+  ext_noinit = 1;
+  LN10_20 = 0.1151292546497022842;
+  PI = 3.141592653589793238;
+
+  // --- DSP HELPERS ---
+  function db_to_amp(db) ( exp(db * LN10_20) );
+  function amp_to_db(amp) ( 20 * log10(max(amp, 0.0000001)) );
+  function sign(x) ( x >= 0 ? 1 : -1 );
+
+  // --- FILTERS ---
+  // Linkwitz-Riley 4th Order Crossover
+  function init_xover(freq, sample_rate)
+  instance(a0, a1, a2, b0, b1, b2)
+  local(w0, alpha, cosw)
+  (
+    w0 = 2 * PI * freq / sample_rate;
+    cosw = cos(w0);
+    alpha = sin(w0) / sqrt(2);
+    b1 = 1 - cosw; b0 = b1 * 0.5; b2 = b0;
+    a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+    b0/=a0; b1/=a0; b2/=a0; a1/=a0; a2/=a0;
+  );
+
+  // Bandpass Filter (For 1k 3D Effect)
+  function init_bp(freq, q, sample_rate)
+  instance(a0, a1, a2, b0, b1, b2)
+  local(w0, alpha, cosw)
+  (
+    w0 = 2 * PI * freq / sample_rate;
+    alpha = sin(w0) / (2 * q);
+    cosw = cos(w0);
+    b0 = alpha; b1 = 0; b2 = -alpha;
+    a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+    b0/=a0; b1/=a0; b2/=a0; a1/=a0; a2/=a0;
+  );
+  
+  // Peaking Filter (Bell)
+  function init_eq_peak(freq, db_gain, q, sample_rate)
+  instance(a0, a1, a2, b0, b1, b2)
+  local(A, w0, alpha, cosw)
+  (
+    A = pow(10, db_gain / 40.0);
+    w0 = 2 * PI * freq / sample_rate;
+    cosw = cos(w0);
+    alpha = sin(w0) / (2 * q);
+    
+    b0 = 1 + alpha * A;
+    b1 = -2 * cosw;
+    b2 = 1 - alpha * A;
+    a0 = 1 + alpha / A;
+    a1 = -2 * cosw;
+    a2 = 1 - alpha / A;
+    
+    b0/=a0; b1/=a0; b2/=a0; a1/=a0; a2/=a0;
+  );
+
+  // Shelving Filter
+  function init_eq_shelf(freq, db_gain, type, sample_rate)
+  instance(a0, a1, a2, b0, b1, b2)
+  local(A, w0, alpha, cosw, beta)
+  (
+    A = pow(10, db_gain / 40.0);
+    w0 = 2 * PI * freq / sample_rate;
+    cosw = cos(w0);
+    alpha = sin(w0) / 2 * sqrt( (A + 1/A)*(1/1.0 - 1) + 2 ); 
+    beta = 2 * sqrt(A) * alpha;
+
+    type == 0 ? ( // Low Shelf
+        b0 =    A*((A+1) - (A-1)*cosw + beta);
+        b1 =  2*A*((A-1) - (A+1)*cosw);
+        b2 =    A*((A+1) - (A-1)*cosw - beta);
+        a0 =      (A+1) + (A-1)*cosw + beta;
+        a1 =   -2*((A-1) + (A+1)*cosw);
+        a2 =      (A+1) + (A-1)*cosw - beta;
+    ) : ( // High Shelf
+        b0 =    A*((A+1) + (A-1)*cosw + beta);
+        b1 = -2*A*((A-1) + (A+1)*cosw);
+        b2 =    A*((A+1) + (A-1)*cosw - beta);
+        a0 =      (A+1) - (A-1)*cosw + beta;
+        a1 =    2*((A-1) - (A+1)*cosw);
+        a2 =      (A+1) - (A-1)*cosw - beta;
+    );
+    
+    b0/=a0; b1/=a0; b2/=a0; a1/=a0; a2/=a0;
+  );
+
+  function process_biquad(xn)
+  instance(xn1, xn2, yn1, yn2, b0, b1, b2, a1, a2)
+  local(yn)
+  (
+    yn = b0*xn + b1*xn1 + b2*xn2 - a1*yn1 - a2*yn2;
+    xn2 = xn1; xn1 = xn;
+    yn2 = yn1; yn1 = yn;
+    yn;
+  );
+  
+  // DC OFFSET REMOVAL FILTER
+  function init_dc(sample_rate)
+  instance(R)
+  (
+    R = 1.0 - (126.0 / sample_rate); 
+  );
+  
+  function process_dc(xn)
+  instance(xn1, yn1, R)
+  local(yn)
+  (
+    yn = xn - xn1 + R * yn1;
+    xn1 = xn;
+    yn1 = yn;
+    yn;
+  );
+
+  // --- SATURATION ENGINES ---
+  
+  function simple_hardclip(x, limit)
+  (
+    max(-limit, min(limit, x));
+  );
+
+  function magma_drive(x, drive_pct) 
+  local(drive, x_driven, abs_x, curve, wet)
+  (
+    drive = 1.0 + (drive_pct * 0.08); 
+    x_driven = x * drive;
+    abs_x = abs(x_driven);
+    curve = x_driven / (1.0 + (abs_x * 0.15) + (abs_x*abs_x * 0.03));
+    wet = drive_pct / 105.0; 
+    (x * (1-wet)) + (curve * wet);
+  );
+
+  function flux_process(x)
+  instance(last_x, slew_limit)
+  local(delta)
+  (
+    delta = x - last_x;
+    abs(delta) > slew_limit ? x = last_x + (sign(delta) * slew_limit);
+    last_x = x;
+    x;
+  );
+
+  // --- MEMORY ---
+  MAX_BUF = 1572864; 
+  buf_idx = 0;
+  gr_disp = 0;
+  
+  // Smoothing variables (Anti-Click)
+  target_ceil = 1.0; 
+  current_ceil = 1.0;
+
+  // --- IRON CORE INIT ---
+  hdb_mem_base = 3000000;
+  hdbA = hdb_mem_base; 
+  hdbB = hdb_mem_base + 11;
+
+  hdb_freq = 0;hdb_reso = 1;hdb_a0 = 2;hdb_a1 = 3;hdb_a2 = 4;
+  hdb_b1 = 5;hdb_b2 = 6;hdb_sL1 = 7;hdb_sL2 = 8;hdb_sR1 = 9;
+  hdb_sR2 = 10;
+  
+  memset(hdbA, 0, 22);
+  
+  // States for Iron Core accumulation
+  headBumpL = 0;
+  headBumpR = 0;
+
+  // --- OZZIFIER INIT (3D Air Engine) ---
+  oz_base = 2000000; 
+  oz_bufsize = srate|0; 
+  oz_bufloc0 = oz_base;
+  oz_bufloc1 = oz_base + oz_bufsize + 1000;
+  oz_voiceptr0 = oz_bufloc1 + oz_bufsize + 1000;
+  oz_voicerate = oz_voiceptr0 + 1000;
+  oz_cospan = oz_voicerate + 1000;
+  oz_sinpan = oz_cospan + 1000;
+  
+  oz_buffer0 = oz_bufloc0;
+  oz_bufdiff = oz_bufloc1 - oz_bufloc0;
+  
+  oz_numvoices = 4;
+  i = 1; loop(oz_numvoices, oz_voiceptr0[i] = oz_bufloc0; i+=1; );
+
+@slider
+  gain_in = db_to_amp(input_db);
+  // TRIM 0 = -25dB
+  gain_out_user = db_to_amp(output_trim - 25.0);
+  
+  target_ceil = db_to_amp(ceiling_db);
+  
+  // Mix Ratio
+  sat_mix_ratio = sat_mix / 100.0;
+
+  // Crossover Initialization
+  lp_L1.init_xover(xover_freq, srate); lp_L2.init_xover(xover_freq, srate);
+  lp_R1.init_xover(xover_freq, srate); lp_R2.init_xover(xover_freq, srate);
+  
+  // DC Filter Initialization (Output)
+  dc_L.init_dc(srate);
+  dc_R.init_dc(srate);
+  
+  // DC Filter Initialization (Iron Core Safety)
+  dc_iron_L.init_dc(srate);
+  dc_iron_R.init_dc(srate);
+  
+  // --- TONE SHAPE CALCULATION ---
+  sh_pct = shape_amt / 100.0;
+  
+  // Tape Focus Curve Definition:
+  sh_g_lo = -3.0 * sh_pct;
+  sh_g_mid = 5.0 * sh_pct;
+  sh_g_hi = -4.0 * sh_pct;
+  
+  // Left Channel EQ
+  sh_L_lo.init_eq_shelf(300, sh_g_lo, 0, srate);
+  sh_L_mi.init_eq_peak(1000, sh_g_mid, 0.7, srate);
+  sh_L_hi.init_eq_shelf(4500, sh_g_hi, 1, srate);
+
+  // Right Channel EQ
+  sh_R_lo.init_eq_shelf(300, sh_g_lo, 0, srate);
+  sh_R_mi.init_eq_peak(1000, sh_g_mid, 0.7, srate);
+  sh_R_hi.init_eq_shelf(4500, sh_g_hi, 1, srate);
+
+  p_magma = magma_amt;
+  
+  // Flux Calculation
+  p_flux_norm = flux_amt / 100;
+  slew_val = 1.0 - (p_flux_norm * 0.95);
+  slew_val = max(0.01, slew_val * slew_val);
+  alch_L.slew_limit = slew_val; alch_R.slew_limit = slew_val;
+
+  // 3D Air Initialization
+  air_pct = air_amt / 100;
+  bp_L.init_bp(1000, 1.0, srate); bp_R.init_bp(1000, 1.0, srate);
+  
+  oz_delaytime = ( (20 + (air_pct * 40)) * 0.001 * srate ) | 0; 
+  oz_pitchspread = 5 + (air_pct * 15);
+  oz_wetmix = air_pct * 0.5;
+  
+  oz_totalpitch = oz_pitchspread * oz_numvoices;
+  oz_bufsize_curr = oz_delaytime|0;
+  oz_xfade = (oz_bufsize_curr * 0.05)|0;
+  
+  oz_panwidth = 1.0; 
+  oz_lpan = 0.5 - (oz_panwidth/2);
+  oz_panincr = oz_panwidth / max(1, oz_numvoices-1);
+
+  i = 1;
+  loop(oz_numvoices,
+    oz_voicerate[i] = 2 ^ (-((oz_totalpitch / 2) - (oz_pitchspread * i)) / 1200);
+    oz_cospan[i] = cos((oz_lpan + (i - 1) * oz_panincr) * $pi / 2);
+    oz_sinpan[i] = sin((oz_lpan + (i - 1) * oz_panincr) * $pi / 2);
+    i += 1;
+  );
+  
+  // --- IRON CORE CALCULATION ---
+  hb_val_A = hb_drive;
+  range_hz = xover_freq - 26;
+  core_freq_hz = 26 + (range_hz * (hb_pos_pct / 100.0));
+  core_freq_hz = max(26, min(core_freq_hz, 500)); 
+
+  // Airwindows "Head Bump" Logic
+  hb_val_B = sqrt((core_freq_hz-25)/175); 
+  hb_val_C = hb_drive;
+
+  hdbA[hdb_freq] = (((hb_val_B*hb_val_B)*175.0)+25.0)/srate;
+  hdbB[hdb_freq] = hdbA[hdb_freq]*0.9375;
+  hdbB[hdb_reso] = hdbA[hdb_reso] = 0.618033988749894848204586;
+  hdbB[hdb_a1] = hdbA[hdb_a1] = 0.0;
+
+  hb_K = tan($pi * hdbA[hdb_freq]);
+  hb_norm = 1.0 / (1.0 + hb_K / hdbA[hdb_reso] + hb_K * hb_K);
+  hdbA[hdb_a0] = hb_K / hdbA[hdb_reso] * hb_norm;
+  hdbA[hdb_a2] = -hdbA[hdb_a0];
+  hdbA[hdb_b1] = 2.0 * (hb_K * hb_K - 1.0) * hb_norm;
+  hdbA[hdb_b2] = (1.0 - hb_K / hdbA[hdb_reso] + hb_K * hb_K) * hb_norm;
+  hb_K = tan($pi * hdbB[hdb_freq]);
+  hb_norm = 1.0 / (1.0 + hb_K / hdbB[hdb_reso] + hb_K * hb_K);
+  hdbB[hdb_a0] = hb_K / hdbB[hdb_reso] * hb_norm;
+  hdbB[hdb_a2] = -hdbB[hdb_a0];
+  hdbB[hdb_b1] = 2.0 * (hb_K * hb_K - 1.0) * hb_norm;
+  hdbB[hdb_b2] = (1.0 - hb_K / hdbB[hdb_reso] + hb_K * hb_K) * hb_norm;
+
+
+@block
+  overallscale = 1.0;
+  overallscale /= 44100.0;
+  overallscale *= srate;
+  
+  headBumpDrive = (hb_val_A * 0.5) / overallscale;
+  hb_correction = 0.0618/sqrt(overallscale);
+
+@sample
+  // ULTRA-SLOW SMOOTHING (No Clicks)
+  current_ceil = (current_ceil * 0.9999) + (target_ceil * 0.0001);
+
+  // 1. INPUT DRIVE
+  spl0 *= gain_in; spl1 *= gain_in;
+  
+  // 2. CROSSOVER SPLIT
+  l_raw_low = lp_L1.process_biquad(spl0); l_raw_low = lp_L2.process_biquad(l_raw_low);
+  l_raw_high = spl0 - l_raw_low;
+
+  r_raw_low = lp_R1.process_biquad(spl1); r_raw_low = lp_R2.process_biquad(r_raw_low);
+  r_raw_high = spl1 - r_raw_low;
+
+  // 3. MAGMA/FLUX PROCESSING
+  l_proc_high = magma_drive(l_raw_high, p_magma);
+  r_proc_high = magma_drive(r_raw_high, p_magma);
+  
+  flux_amt > 0 ? (
+    l_proc_high = alch_L.flux_process(l_proc_high); 
+    r_proc_high = alch_R.flux_process(r_proc_high);
+  );
+  
+  // Low Band processing logic (Clean vs Growl)
+  low_mode == 1 ? (
+    l_proc_low = magma_drive(l_raw_low, p_magma * 0.5); 
+    r_proc_low = magma_drive(r_raw_low, p_magma * 0.5);
+  ) : (
+    l_proc_low = l_raw_low; 
+    r_proc_low = r_raw_low;
+  );
+  
+  // --- IRON CORE PROCESSING (LOW BAND ONLY) ---
+  hb_drive > 0 ? (
+    // Save Dry for mix
+    hb_dry_L = l_proc_low;
+    hb_dry_R = r_proc_low;
+    
+    headBumpL += (l_proc_low * headBumpDrive);
+    headBumpL -= (headBumpL * headBumpL * headBumpL * hb_correction);
+    headBumpR += (r_proc_low * headBumpDrive);
+    headBumpR -= (headBumpR * headBumpR * headBumpR * hb_correction);
+    
+    // Filter A
+    headBiqSampleL = (headBumpL * hdbA[hdb_a0]) + hdbA[hdb_sL1];
+    hdbA[hdb_sL1] = (headBumpL * hdbA[hdb_a1]) - (headBiqSampleL * hdbA[hdb_b1]) + hdbA[hdb_sL2];
+    hdbA[hdb_sL2] = (headBumpL * hdbA[hdb_a2]) - (headBiqSampleL * hdbA[hdb_b2]);
+    
+    headBiqSampleR = (headBumpR * hdbA[hdb_a0]) + hdbA[hdb_sR1];
+    hdbA[hdb_sR1] = (headBumpR * hdbA[hdb_a1]) - (headBiqSampleR * hdbA[hdb_b1]) + hdbA[hdb_sR2];
+    hdbA[hdb_sR2] = (headBumpR * hdbA[hdb_a2]) - (headBiqSampleR * hdbA[hdb_b2]);
+    
+    // Filter B
+    headBumpSampleL = (headBiqSampleL * hdbB[hdb_a0]) + hdbB[hdb_sL1];
+    hdbB[hdb_sL1] = (headBiqSampleL * hdbB[hdb_a1]) - (headBumpSampleL * hdbB[hdb_b1]) + hdbB[hdb_sL2];
+    hdbB[hdb_sL2] = (headBiqSampleL * hdbB[hdb_a2]) - (headBumpSampleL * hdbB[hdb_b2]);
+    
+    headBumpSampleR = (headBiqSampleR * hdbB[hdb_a0]) + hdbB[hdb_sR1];
+    hdbB[hdb_sR1] = (headBiqSampleR * hdbB[hdb_a1]) - (headBumpSampleR * hdbB[hdb_b1]) + hdbB[hdb_sR2];
+    hdbB[hdb_sR2] = (headBiqSampleR * hdbB[hdb_a2]) - (headBumpSampleR * hdbB[hdb_b2]);
+    
+    // Apply Mix to Low Band
+    l_proc_low = (headBumpSampleL * hb_val_C) + (hb_dry_L * (1.0 - hb_val_C));
+    r_proc_low = (headBumpSampleR * hb_val_C) + (hb_dry_R * (1.0 - hb_val_C));
+    
+    // *** CRITICAL FIX: Clean DC Offset IMMEDIATELY after Iron Core ***
+    // This prevents offset signals from hitting the rest of the chain
+    l_proc_low = dc_iron_L.process_dc(l_proc_low);
+    r_proc_low = dc_iron_R.process_dc(r_proc_low);
+  );
+
+  // 4. SATURATION MIX (Dry/Wet Blend)
+  l_high = (l_raw_high * (1.0 - sat_mix_ratio)) + (l_proc_high * sat_mix_ratio);
+  r_high = (r_raw_high * (1.0 - sat_mix_ratio)) + (r_proc_high * sat_mix_ratio);
+  
+  low_mode == 1 ? (
+     l_low = (l_raw_low * (1.0 - sat_mix_ratio)) + (l_proc_low * sat_mix_ratio);
+     r_low = (r_raw_low * (1.0 - sat_mix_ratio)) + (r_proc_low * sat_mix_ratio);
+  ) : (
+     l_low = l_raw_low; 
+     r_low = r_raw_low;
+  );
+  
+  // If low mode is clean, we still want Iron Core to be applied if user dialed it in
+  low_mode == 0 && hb_drive > 0 ? (
+     l_low = l_proc_low;
+     r_low = r_proc_low;
+  );
+
+  // Re-Sum Bands
+  sum_L = l_low + l_high;
+  sum_R = r_low + r_high;
+
+  // 5. 3D AIR (Post-Mix, Pre-Ceiling)
+  air_amt > 0 ? (
+      oz_in_L = bp_L.process_biquad(sum_L); oz_in_R = bp_R.process_biquad(sum_R);
+      oz_wet0 = 0; oz_wet1 = 0;
+      i = 1;
+      loop(oz_numvoices,
+        v0 = oz_voiceptr0[i]; 
+        iv0 = 0|v0; frac0 = v0 - iv0;
+        iv02 = iv0 >= (oz_bufloc0 + oz_bufsize_curr - 1) ? iv0 - oz_bufsize_curr + 1 : iv0 + 1;
+        ren0 = (iv0[0] * (1-frac0) + iv02[0] * frac0);
+        ren1 = (iv0[oz_bufdiff] * (1-frac0) + iv02[oz_bufdiff] * frac0);
+        
+        vr = oz_voicerate[i];
+        vr >= 1.0 ? (
+          tv = v0; tv > oz_buffer0 ? tv -= oz_bufsize_curr;
+          (tv >= oz_buffer0 - oz_xfade && tv < oz_buffer0) ? (
+             frac = (oz_buffer0 - tv) / oz_xfade;
+             tmp = v0 + oz_xfade; tmp >= oz_bufloc0 + oz_bufsize_curr ? tmp -= oz_bufsize_curr;
+             tmp2 = tmp >= oz_bufloc0 + oz_bufsize_curr - 1 ? oz_bufloc0 : tmp + 1;
+             ren0 = ren0 * frac + (1-frac) * (tmp[0] * (1-frac0) + tmp2[0] * frac0);
+             ren1 = ren1 * frac + (1-frac) * (tmp[oz_bufdiff] * (1-frac0) + tmp2[oz_bufdiff] * frac0);
+             tv + vr > oz_buffer0 + 1 ? v0 += oz_xfade;
+          );
+        ) : (
+          tv = v0; tv < oz_buffer0 ? tv += oz_bufsize_curr;
+          (tv >= oz_buffer0 && tv < oz_buffer0 + oz_xfade) ? (
+             frac = (tv - oz_buffer0) / oz_xfade;
+             tmp = v0 + oz_xfade; tmp >= oz_bufloc0 + oz_bufsize_curr ? tmp -= oz_bufsize_curr;
+             tmp2 = tmp >= oz_bufloc0 + oz_bufsize_curr - 1 ? oz_bufloc0 : tmp + 1;
+             ren0 = ren0 * frac + (1-frac) * (tmp[0] * (1-frac0) + tmp2[0] * frac0);
+             ren1 = ren1 * frac + (1-frac) * (tmp[oz_bufdiff] * (1-frac0) + tmp2[oz_bufdiff] * frac0);
+             tv + vr < oz_buffer0 + 1 ? v0 += oz_xfade;
+          );
+        );
+        oz_wet0 += oz_cospan[i] * ren0; oz_wet1 += oz_sinpan[i] * ren1;
+        v0 += vr; v0 >= (oz_bufloc0 + oz_bufsize_curr) ? v0 -= oz_bufsize_curr;
+        oz_voiceptr0[i] = v0; i += 1;
+      );
+      oz_buffer0[0] = oz_in_L; oz_buffer0[oz_bufdiff] = oz_in_R;
+      oz_buffer0 += 1; oz_buffer0 >= (oz_bufloc0 + oz_bufsize_curr) ? oz_buffer0 -= oz_bufsize_curr;
+      sum_L += oz_wet0 * oz_wetmix; sum_R += oz_wet1 * oz_wetmix;
+  ) : (
+      oz_buffer0[0] = 0; oz_buffer0[oz_bufdiff] = 0;
+      oz_buffer0 += 1; oz_buffer0 >= (oz_bufloc0 + oz_bufsize_curr) ? oz_buffer0 -= oz_bufsize_curr;
+  );
+
+  // NEW: TONE SHAPE PROCESSING (Before Ceiling)
+  shape_amt > 0 ? (
+    sum_L = sh_L_lo.process_biquad(sum_L);
+    sum_L = sh_L_mi.process_biquad(sum_L);
+    sum_L = sh_L_hi.process_biquad(sum_L);
+    
+    sum_R = sh_R_lo.process_biquad(sum_R);
+    sum_R = sh_R_mi.process_biquad(sum_R);
+    sum_R = sh_R_hi.process_biquad(sum_R);
+  );
+
+  // 6. STABLE CEILING & GR CALCULATION
+  peak_pre = max(abs(sum_L), abs(sum_R));
+  
+  // Using Simple Hard Clipper for rock-solid stability
+  sum_L = simple_hardclip(sum_L, current_ceil);
+  sum_R = simple_hardclip(sum_R, current_ceil);
+  
+  // NEW: DC OFFSET REMOVAL (Output Safety)
+  sum_L = dc_L.process_dc(sum_L);
+  sum_R = dc_R.process_dc(sum_R);
+  
+  peak_post = max(abs(sum_L), abs(sum_R));
+  
+  curr_gr = (peak_pre > peak_post) ? amp_to_db(peak_pre) - amp_to_db(peak_post) : 0;
+  curr_gr > gr_disp ? gr_disp = curr_gr : gr_disp *= 0.99;
+
+  // 7. OUTPUT
+  spl0 = sum_L * gain_out_user;
+  spl1 = sum_R * gain_out_user;
+  
+  // 8. SCOPE DATA BUFFERING
+  buf_idx[0] = l_low * gain_out_user; 
+  buf_idx[1] = spl0;
+  buf_idx[2] = spl1;
+  buf_idx = (buf_idx + 3) & 1048575;
+
+@gfx 600 300
+  gfx_clear = 0x141010; 
+  amp_ceil_draw = current_ceil; 
+  scale_y = (gfx_h * 0.4) / amp_ceil_draw;
+  cy = gfx_h / 2;
+  
+// NAME
+gfx_setfont(1, "Arial", 56, 'b');
+gfx_x = 15; 
+gfx_y = 15;
+gfx_set(1, 0.4, 0.2, 1);
+gfx_drawstr("THE BASS FOUNDRY");
+
+// Gain Reduction
+gfx_setfont(3, "Arial", 20, 'b');
+gfx_x = gfx_w - 80; 
+gfx_y = 20;
+
+gr_disp > 0.1 ? (
+  gfx_set(1, 0.2, 0.2, 1);
+  gfx_printf("GR: -%.1f", gr_disp);
+) : (
+  gfx_set(0.3, 0.3, 0.3, 1);
+  gfx_drawstr("GR: 0.0");
+);
+
+// 3D (STATE)
+air_amt > 0 ? (
+  gfx_setfont(2, "Arial", 16, 'b');
+  gfx_x = gfx_w - 80;
+  gfx_y = 44;
+  gfx_set(0.6, 0.8, 1, 0.8);
+  gfx_drawstr("3D ON");
+);
+
+
+// SCOPE RENDERING
+  nsamps = floor(0.5 * srate); nsamps = min(nsamps, 300000);
+  read_ptr = (buf_idx - nsamps*3) & 1048575;
+  spp = nsamps / gfx_w; 
+  
+  // Draw Grid
+  gfx_set(0.3, 0.3, 0.3, 0.5);
+  gfx_line(0, cy, gfx_w, cy);
+  ceil_y = cy - (amp_ceil_draw * scale_y); gfx_line(0, ceil_y, gfx_w, ceil_y);
+  ceil_y_b = cy + (amp_ceil_draw * scale_y); gfx_line(0, ceil_y_b, gfx_w, ceil_y_b);
+
+  // --- DYNAMIC VISUAL CALCULATIONS ---
+  a_magma = 0.7 + (magma_amt * 0.003); 
+  w_air = 2 + floor(air_amt * 0.04);
+  w_tape = 2 + floor(shape_amt * 0.03);
+  a_iron = 0.3 + (hb_drive * 0.5);
+
+  // LAYER 1: Low End (Blue - Body)
+  hb_drive > 0 ? (
+     gfx_set(0.2, 1.0, 0.9, a_iron); 
+  ) : (
+     gfx_set(0.2, 0.55, 1.0, 0.6); 
+  );
+
+  x = 0; rp = read_ptr;
+  while (x < gfx_w) (
+    max_v = -100; min_v = 100; loop(min(spp, 50), v = rp[0]; v > max_v ? max_v = v; v < min_v ? min_v = v; rp = (rp+3)&1048575; ); spp > 50 ? rp = (rp + (spp-50)*3) & 1048575;
+    y1 = cy - (max_v * scale_y); y2 = cy - (min_v * scale_y); 
+    gfx_rect(x, y1, 1, max(1, y2-y1)); 
+    x+=1;
+  );
+  
+  // LAYER 2: Output L (Main Impact)
+  tape_g = 0.6 + (shape_amt * 0.003);
+  tape_b = 0.2 + (shape_amt * 0.003);
+  
+  gfx_set(1.0, tape_g, tape_b, a_magma); 
+
+  x = 0; rp = read_ptr;
+  while (x < gfx_w) (
+    max_v = -100; min_v = 100; loop(min(spp, 50), v = rp[1]; v > max_v ? max_v = v; v < min_v ? min_v = v; rp = (rp+3)&1048575; ); spp > 50 ? rp = (rp + (spp-50)*3) & 1048575;
+    y1 = cy - (max_v * scale_y); y2 = cy - (min_v * scale_y); y1 < 25 ? y1 = 25; y2 > gfx_h-5 ? y2 = gfx_h-5; 
+    gfx_rect(x, y1, w_tape, max(1, y2-y1)); 
+    x+=1;
+  );
+
+  // LAYER 3: Output R (Magenta - 3D)
+  air_amt > 0 ? (
+    gfx_set(1.0, 0.3, 0.9, 0.9); 
+    x = 0; rp = read_ptr;
+    while (x < gfx_w) (
+      max_v = -100; min_v = 100; loop(min(spp, 50), v = rp[2]; v > max_v ? max_v = v; v < min_v ? min_v = v; rp = (rp+3)&1048575; ); spp > 50 ? rp = (rp + (spp-50)*3) & 1048575;
+      y1 = cy - (max_v * scale_y); y2 = cy - (min_v * scale_y); y1 < 25 ? y1 = 25; y2 > gfx_h-5 ? y2 = gfx_h-5; 
+      gfx_rect(x, y1, w_air, max(1, y2-y1)); 
+      x+=1;
+    );
+  );
