@@ -1,0 +1,346 @@
+desc: The Depth Control (DocShadrach)
+// Author: Doc Shadrach
+// Version: 1.0
+
+// --- CONTROLS ---
+slider1:distance=0<0,100,0.1>Distance (%)
+slider2:out_gain=0<-12,12,0.1>Output Trim (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+  ext_noinit = 1;
+  
+  // --- CONSTANTS ---
+  PI = 3.141592653589793238;
+  HALF_PI = PI * 0.5;
+  TWO_PI = 2 * PI;
+  
+  // --- DSP FUNCTIONS ---
+  function init_one_pole(fc, sample_rate)
+  instance(a0, b1)
+  local(costh)
+  (
+    costh = 2.0 - cos(TWO_PI * fc / sample_rate);
+    b1 = costh - sqrt(costh * costh - 1.0);
+    a0 = 1.0 - b1;
+  );
+
+  function process_one_pole(xn)
+  instance(yn1, a0, b1)
+  local(yn)
+  (
+    yn = xn * a0 + yn1 * b1;
+    yn1 = yn;
+    yn;
+  );
+
+  function process_slew(xn, limit)
+  instance(last_y)
+  local(delta)
+  (
+    delta = xn - last_y;
+    delta > limit ? delta = limit;
+    delta < -limit ? delta = -limit;
+    last_y += delta;
+    last_y;
+  );
+
+  // --- REVERB / AMBIENCE INIT ---
+  buf_start = 100000;
+  
+  d1_len = (srate * 0.013)|0; 
+  d2_len = (srate * 0.019)|0; 
+  d3_len = (srate * 0.023)|0; 
+  d4_len = (srate * 0.029)|0; 
+  
+  d1_idx = buf_start;
+  d2_idx = d1_idx + d1_len + 100;
+  d3_idx = d2_idx + d2_len + 100;
+  d4_idx = d3_idx + d3_len + 100;
+  
+  memset(buf_start, 0, d4_idx + d4_len + 1000);
+  
+  p1=0; p2=0; p3=0; p4=0;
+
+@slider
+  // Handled in @block
+
+@block
+  // --- PARAMETER CALCULATION ---
+  dist_norm = distance / 100.0;
+  
+  // 1. FILTER
+  cut_freq = 22000 * pow(0.08, dist_norm);
+  cut_freq = max(1000, cut_freq);
+  
+  lpf_L.init_one_pole(cut_freq, srate);
+  lpf_R.init_one_pole(cut_freq, srate);
+  
+  // 2. SLEW
+  slew_thresh = 1.0 - (dist_norm * 0.98); 
+  
+  // 3. WIDTH
+  width_amt = 1.0 - (dist_norm * 0.7);
+  
+  // 4. MIX
+  verb_mix = pow(dist_norm, 1.5) * 0.45; 
+  
+  // 5. GAIN
+  dist_gain = 1.0 - (dist_norm * 0.5);
+  user_gain = pow(10, out_gain / 20.0);
+
+@sample
+  inL = spl0;
+  inR = spl1;
+  
+  // *** BYPASS LOGIC ***
+  distance > 0 ? (
+      // 1. Direct
+      procL = lpf_L.process_one_pole(inL);
+      procR = lpf_R.process_one_pole(inR);
+      
+      procL = slew_L.process_slew(procL, slew_thresh);
+      procR = slew_R.process_slew(procR, slew_thresh);
+      
+      mid = (procL + procR) * 0.5;
+      side = (procL - procR) * 0.5;
+      side *= width_amt;
+      procL = mid + side;
+      procR = mid - side;
+      
+      // 2. Ambience
+      verb_in = (procL + procR) * 0.5;
+      
+      v1 = d1_idx[p1]; v2 = d2_idx[p2]; v3 = d3_idx[p3]; v4 = d4_idx[p4];
+      
+      d1_idx[p1] = verb_in + (v2 * 0.3);
+      d2_idx[p2] = verb_in - (v3 * 0.35); 
+      d3_idx[p3] = verb_in + (v4 * 0.3);
+      d4_idx[p4] = verb_in - (v1 * 0.35);
+      
+      p1 = (p1 + 1) % d1_len;
+      p2 = (p2 + 1) % d2_len;
+      p3 = (p3 + 1) % d3_len;
+      p4 = (p4 + 1) % d4_len;
+      
+      wetL = v1 + v3;
+      wetR = v2 + v4;
+      
+      // 3. Mix
+      outL = procL + (wetL * verb_mix);
+      outR = procR + (wetR * verb_mix);
+      
+      outL *= dist_gain;
+      outR *= dist_gain;
+  ) : (
+      outL = inL;
+      outR = inR;
+  );
+  
+  spl0 = outL * user_gain;
+  spl1 = outR * user_gain;
+
+@gfx 400 300
+  // Dark deep background
+  gfx_clear = 0x050508; 
+  
+  // --- RESPONSIVE DETECTION ---
+  is_embedded = (gfx_h < 150);
+  cx = gfx_w / 2;
+  cy = gfx_h / 2;
+
+  // --- MOUSE CONTROL ---
+  mouse_cap & 1 ? (
+    !last_cap ? (
+      last_y = mouse_y;
+      last_val = distance;
+      last_cap = 1; 
+    );
+    dy = (last_y - mouse_y) * 0.5; 
+    slider1 = min(100, max(0, last_val + dy));
+    
+    // Sync graphical variables immediately
+    distance = slider1; 
+    dist_norm = distance / 100.0;
+    
+    slider_automate(slider1); 
+  ) : (
+    last_cap = 0;
+  );
+
+  // ===========================================
+  // VIEW 1: EMBEDDED TCP (PRO KNOB)
+  // ===========================================
+  is_embedded ? (
+    
+    // Config
+    knob_r = min(gfx_w, gfx_h) * 0.28; 
+    arc_r  = knob_r * 1.3;            
+    arc_w  = 5;                        
+    
+    // Angles
+    ang_start = -2.356; 
+    ang_end   =  2.356; 
+    ang_curr  = ang_start + (dist_norm * (ang_end - ang_start));
+    
+    arc_draw_start = ang_start - HALF_PI;
+    arc_draw_end   = ang_end   - HALF_PI;
+    arc_draw_curr  = ang_curr  - HALF_PI;
+
+    // Background Arc
+    gfx_set(0.12, 0.12, 0.12, 1.0);
+    i = 0; loop(arc_w * 2, r_offset = (i * 0.5) - (arc_w * 0.5); gfx_arc(cx, cy, arc_r + r_offset, arc_draw_start, arc_draw_end); i += 1; );
+    
+    // Value Arc
+    gfx_set(1.0, 0.6 - (dist_norm*0.2), 0.2, 1.0);
+    i = 0; loop(arc_w * 2, r_offset = (i * 0.5) - (arc_w * 0.5); gfx_arc(cx, cy, arc_r + r_offset, arc_draw_start, arc_draw_curr); i += 1; );
+    
+    // Knob Body
+    gfx_set(0.05, 0.05, 0.05, 0.8); gfx_circle(cx, cy+2, knob_r, 1);
+    gfx_set(0.2, 0.2, 0.2, 1); gfx_circle(cx, cy, knob_r, 1);
+    gfx_set(0.35, 0.35, 0.35, 1); gfx_circle(cx - (knob_r*0.1), cy - (knob_r*0.1), knob_r * 0.85, 1);
+    gfx_set(0.1, 0.1, 0.1, 1); gfx_circle(cx, cy, knob_r * 0.75, 1);
+    
+    // Pointer
+    px = cx + sin(ang_curr) * (knob_r * 0.7);
+    py = cy - cos(ang_curr) * (knob_r * 0.7);
+    gfx_set(1.0, 0.8, 0.4, 0.9); gfx_circle(px, py, 3, 1);
+    
+    // Center Text
+    gfx_setfont(1, "Arial", 18, 'b'); gfx_set(1.0, 1.0, 1.0, 1.0);
+    distance < 1 ? ( #val_str = "OFF"; gfx_set(0.6, 0.6, 0.6, 1.0); ) : ( sprintf(#val_str, "%d%%", distance); );
+    gfx_measurestr(#val_str, w_v, h_v); gfx_x = cx - (w_v/2); gfx_y = cy - (h_v/2); gfx_drawstr(#val_str);
+    
+    // Label Below
+    gfx_setfont(1, "Arial", 13, 'b');
+    label_short = "";
+    distance < 1 ? ( label_short = "BYPASS"; gfx_set(0.5,0.5,0.5,1); ) :
+    distance < 30 ? ( label_short = "CLOSE";  gfx_set(0.8,0.9,1.0,1); ) :
+    distance < 70 ? ( label_short = "MID";    gfx_set(1.0,0.8,0.4,1); ) :
+    ( label_short = "FAR";    gfx_set(1.0,0.4,0.2,1); );
+    gfx_measurestr(label_short, w_s, h_s);
+    gfx_x = cx - (w_s/2); gfx_y = cy + arc_r + 10; (gfx_y + h_s) > gfx_h ? gfx_y = gfx_h - h_s - 2;
+    gfx_drawstr(label_short);
+
+  ) : (
+  // ===========================================
+  // VIEW 2: FULL WINDOW (THE ATMOSPHERE)
+  // ===========================================
+  
+    // --- 1. Horizon & Sky ---
+    horizon_y = cy;
+    
+    // Draw Sky (Simple gradient simulation by drawing lines)
+    // Dark top to lighter horizon
+    i = 0;
+    loop(horizon_y, 
+       val = i / horizon_y;
+       gfx_set(0.05 + val*0.05, 0.05 + val*0.05, 0.1 + val*0.1, 1.0);
+       gfx_line(0, i, gfx_w, i);
+       i += 2;
+    );
+    
+    // --- 2. The Grid (Perspective Floor) ---
+    // Floor is black with Cyan lines
+    gfx_set(0.0, 0.0, 0.0, 1.0); // Black floor fill
+    gfx_rect(0, horizon_y, gfx_w, gfx_h - horizon_y);
+    
+    // Vertical Grid Lines (Perspective)
+    gfx_set(0.0, 0.6, 0.7, 0.3); // Cyan dim
+    
+    // Draw lines radiating from vanishing point
+    grid_spacing = 80;
+    offset_x = (slider1 * 0.5) % grid_spacing; // Parallax effect if we wanted animation, static for now
+    
+    i = -gfx_w;
+    loop(40, // Enough lines to cover wide windows
+       x_btm = cx + (i * grid_spacing);
+       gfx_line(cx, horizon_y, x_btm, gfx_h);
+       i += 1;
+    );
+    
+    // Horizontal Grid Lines (Logarithmic depth)
+    i = 1;
+    loop(15,
+       y_pos = horizon_y + ( (gfx_h - horizon_y) / i );
+       gfx_line(0, y_pos, gfx_w, y_pos);
+       i += 0.5; // Dense lines near horizon
+    );
+    
+    // --- 3. The Sound Object (Glowing Orb) ---
+    
+    // Calculate Position & Size
+    // Close: Big, Lower Y
+    // Far: Small, Horizon Y
+    
+    obj_base_size = 120;
+    obj_size = obj_base_size * (1.0 - (dist_norm * 0.85)); // Never disappears completely
+    
+    // Non-linear Y movement for better perspective feel
+    obj_y = horizon_y + ((gfx_h - horizon_y) * 0.6 * (1.0 - dist_norm));
+    
+    // Dynamic Color Shift
+    // Close: Hot Orange/White
+    // Far: Cold Blue/Grey
+    
+    c_r = 1.0 - (dist_norm * 0.8);
+    c_g = 0.8 - (dist_norm * 0.3);
+    c_b = 0.6 + (dist_norm * 0.4);
+    
+    // Draw Glow (Multiple low-alpha circles)
+    glow_size = obj_size * 2.5;
+    glow_alpha = 0.15 - (dist_norm * 0.1); // Glow fades with distance
+    
+    gfx_set(c_r, c_g, c_b, glow_alpha);
+    gfx_circle(cx, obj_y, glow_size * 0.6, 1);
+    gfx_circle(cx, obj_y, glow_size * 0.8, 1);
+    gfx_circle(cx, obj_y, glow_size * 1.0, 1);
+    
+    // Draw Core Orb
+    gfx_set(c_r + 0.2, c_g + 0.2, c_b + 0.2, 1.0); // Brighter core
+    gfx_circle(cx, obj_y, obj_size * 0.5, 1);
+    
+    // --- 4. Atmospheric Fog (Overlay) ---
+    // Draws a semi-transparent gradient near horizon to "hide" the distant grid
+    i = 0;
+    fog_height = 80;
+    loop(fog_height,
+       alpha = 1.0 - (i / fog_height);
+       gfx_set(0.05, 0.05, 0.08, alpha * 0.8); // Dark fog
+       gfx_line(0, horizon_y + i, gfx_w, horizon_y + i); // Bottom fog
+       gfx_line(0, horizon_y - i, gfx_w, horizon_y - i); // Top fog
+       i += 1;
+    );
+    
+    // --- 5. Main Text ---
+    gfx_setfont(1, "Arial", 28, 'b');
+    
+    // Text Color matches Orb
+    gfx_set(c_r, c_g, c_b, 0.9);
+    
+    label = "";
+    distance < 1 ? label = "BYPASS" :
+    distance < 25 ? label = "CLOSE FIELD" :
+    distance < 50 ? label = "MID FIELD" :
+    distance < 75 ? label = "FAR FIELD" :
+    label = "BACKGROUND";
+    
+    gfx_measurestr(label, w_l, h_l);
+    gfx_x = cx - (w_l / 2);
+    gfx_y = 40;
+    gfx_drawstr(label);
+    
+    // Percentage Subtitle
+    gfx_setfont(2, "Arial", 16);
+    gfx_set(1, 1, 1, 0.4);
+    sprintf(str_p, "DEPTH: %d%%", distance);
+    gfx_measurestr(str_p, w_p, h_p);
+    gfx_x = cx - (w_p / 2);
+    gfx_y = 75;
+    gfx_drawstr(str_p);
+    
+  );
