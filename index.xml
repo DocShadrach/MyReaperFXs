@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="907ac0122fd3a5158a9df6fa1e6d1463109c7de5">
+<index version="1" name="DocShadrach FXs" commit="2f7a26aab99889c7275626101eb622eb0a7ce658">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -123,6 +123,22 @@ A very versatile bass saturator.
     <version name="1.0.0" author="Doc Shadrach" time="2025-12-13T07:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
     <source file="The_Bass_Foundry.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/907ac0122fd3a5158a9df6fa1e6d1463109c7de5/The_Bass_Foundry.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="The_Depth_Control.jsfx" type="effect" desc="The Depth Control (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+The Depth Control
+======================
+Author: Doc Shadrach
+
+A simple plugin to add depth to the elements of a mix.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-13T09:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="The_Depth_Control.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/2f7a26aab99889c7275626101eb622eb0a7ce658/The_Depth_Control.jsfx</source>
     </version>
     </reapack>
  </category>
