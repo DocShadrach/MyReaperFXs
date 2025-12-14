@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="2f7a26aab99889c7275626101eb622eb0a7ce658">
+<index version="1" name="DocShadrach FXs" commit="29564c3b2d97d6eaaed71770eb94a2c4c1c68447">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -84,6 +84,10 @@ A small utility to remove latency from NAM captures.
     <version name="1.1.0" author="Doc Shadrach" time="2025-12-12T09:00:00Z">
      <changelog><![CDATA[The gain parameter has been removed.]]></changelog>
     <source file="NAM_Alignment_Tool.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/66381bbd4a07f933fedcfa01f643f8a7073d64cc/NAM_Alignment_Tool.jsfx</source>
+    </version>
+    <version name="1.2.0" author="Doc Shadrach" time="2025-12-14T07:00:00Z">
+     <changelog><![CDATA[Now it goes up to -500 samples.]]></changelog>
+    <source file="NAM_Alignment_Tool.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/29564c3b2d97d6eaaed71770eb94a2c4c1c68447/NAM_Alignment_Tool.jsfx</source>
     </version>
     </reapack>
 
