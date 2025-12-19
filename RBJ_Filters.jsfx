@@ -1,0 +1,388 @@
+// Copyright 2006, Thomas Scott Stillwell
+// Copyright 2025, Doc Shadrach
+// All rights reserved.
+//
+//Redistribution and use in source and binary forms, with or without modification, are permitted 
+//provided that the following conditions are met:
+//
+//Redistributions of source code must retain the above copyright notice, this list of conditions 
+//and the following disclaimer. 
+//
+//Redistributions in binary form must reproduce the above copyright notice, this list of conditions 
+//and the following disclaimer in the documentation and/or other materials provided with the distribution. 
+//
+//The name of Thomas Scott Stillwell may not be used to endorse or 
+//promote products derived from this software without specific prior written permission. 
+//
+//THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR 
+//IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND 
+//FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS 
+//BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES 
+//(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR 
+//PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, 
+//STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF 
+//THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+desc: RBJ Filters for TCP (DocShadrach)
+//tags: filter, eq
+//author: Doc Shadrach
+//version: 1.0
+
+slider1:0<0,1000,10>HPF
+slider2:22000<1000,22000,200>LPF
+slider3:0<0,1,1>-Bypass
+
+// -- HIDDEN SLIDERS FOR PRESET MEMORY --
+slider10:40<0,1000,1>-HPF Btn 1
+slider11:80<0,1000,1>-HPF Btn 2
+slider12:100<0,1000,1>-HPF Btn 3
+slider13:120<0,1000,1>-HPF Btn 4
+slider14:150<0,1000,1>-HPF Btn 5
+
+slider20:6000<1000,22000,1>-LPF Btn 1
+slider21:10000<1000,22000,1>-LPF Btn 2
+slider22:12000<1000,22000,1>-LPF Btn 3
+slider23:15000<1000,22000,1>-LPF Btn 4
+slider24:18000<1000,22000,1>-LPF Btn 5
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+  ext_tail_size = -1;
+  
+  // Define Filter Calculation Function
+  // This ensures we can call it from anywhere (Slider or Block)
+  function update_filters() (
+      // Bypass Logic
+      bypass = slider3;
+
+      // HPF Logic
+      freq1 = slider1;
+      slider1 == 0 ? hpf = 0 : hpf = 1;
+      
+      a1 = 1;
+      s1 = 1;
+      q1 = 1 / (sqrt((a1 + 1/a1)*(1/s1 - 1) + 2));
+      w01 = 2 * $pi * freq1/srate;
+      cosw01 = cos(w01);
+      sinw01 = sin(w01);
+      alpha1 = sinw01 / (2 * q1);
+
+      b01 = (1 + cosw01)/2;
+      b11 = -(1 + cosw01);
+      b21 = (1 + cosw01)/2;
+      a01 = 1 + alpha1;
+      a11 = -2 * cosw01;
+      a21 = 1 - alpha1;
+      b01 /= a01;
+      b11 /= a01;
+      b21 /= a01;
+      a11 /= a01;
+      a21 /= a01;
+
+      // LPF Logic
+      freq3 = slider2;
+      slider2 == 22000 ? lpf = 0 : lpf = 1;
+
+      a3 = 1;
+      s3 = 1;
+      q3 = 1 / (sqrt((a3 + 1/a3)*(1/s3 - 1) + 2));
+      w03 = 2 * $pi * freq3/srate;
+      cosw03 = cos(w03);
+      sinw03 = sin(w03);
+      alpha3 = sinw03 / (2 * q3);
+
+      b03 = (1 - cosw03)/2;
+      b13 = (1 - cosw03);
+      b23 = (1 - cosw03)/2;
+      a03 = 1 + alpha3;
+      a13 = -2 * cosw03;
+      a23 = 1 - alpha3;
+      b03 /= a03;
+      b13 /= a03;
+      b23 /= a03;
+      a13 /= a03;
+      a23 /= a03;
+  );
+  
+  // Initial Calc
+  update_filters();
+
+@slider
+  // Standard slider change
+  update_filters();
+
+@block
+  // Continuous check: Did the sliders change via the TCP Graphic?
+  // If so, update the audio engine immediately.
+  (slider1 != last_slider1 || slider2 != last_slider2 || slider3 != last_slider3) ? (
+      update_filters();
+      last_slider1 = slider1;
+      last_slider2 = slider2;
+      last_slider3 = slider3;
+  );
+
+@sample
+  bypass == 0 ? (
+      hpf != 0 ? (
+      ospl0 = spl0;
+      spl0 = b01 * spl0 + b11 * xl11 + b21 * xl21 - a11 * yl11 - a21 * yl21;
+      xl21 = xl11;
+      xl11 = ospl0;
+      yl21 = yl11;
+      yl11 = spl0;
+
+      ospl1 = spl1;
+      spl1 = b01 * spl1 + b11 * xr11 + b21 * xr21 - a11 * yr11 - a21 * yr21;
+      xr21 = xr11;
+      xr11 = ospl1;
+      yr21 = yr11;
+      yr11 = spl1;
+      );
+
+      lpf != 0 ? (
+      ospl0 = spl0;
+      spl0 = b03 * spl0 + b13 * xl13 + b23 * xl23 - a13 * yl13 - a23 * yl23;
+      xl23 = xl13;
+      xl13 = ospl0;
+      yl23 = yl13;
+      yl13 = spl0;
+
+      ospl1 = spl1;
+      spl1 = b03 * spl1 + b13 * xr13 + b23 * xr23 - a13 * yr13 - a23 * yr23;
+      xr23 = xr13;
+      xr13 = ospl1;
+      yr23 = yr13;
+      yr13 = spl1;
+      );
+  );
+
+@gfx 320 80
+  
+  // -- Global Layout --
+  gfx_clear = 0x202020; 
+  mid_x = gfx_w * 0.5;
+  
+  // Dynamic Button Visibility
+  gfx_h < 40 ? ( btn_h = 0; show_buttons = 0; ) : ( btn_h = 18; show_buttons = 1; );
+  text_area_h = gfx_h - btn_h;
+  
+  // -- FONT SIZE LOGIC --
+  title_area_h = text_area_h * 0.35;
+  value_area_h = text_area_h * 0.65;
+  
+  ideal_val_sz = max(16, value_area_h * 0.8);
+  w_avail = mid_x - 10; 
+  max_sz_by_width = w_avail / 2.2; 
+  font_sz = min(ideal_val_sz, max_sz_by_width);
+  
+  raw_title_sz = title_area_h * 0.8;
+  title_font_sz = min(raw_title_sz, 30);
+  
+  gfx_setfont(1, "Arial", font_sz, 'b'); 
+  gfx_setfont(2, "Arial", font_sz*0.4, 'b');
+  gfx_setfont(3, "Arial", 10); 
+  gfx_setfont(4, "Arial", title_font_sz, 'b'); 
+
+  // -- BACKGROUNDS --
+  bypass == 0 ? (
+      slider1 > 0 ? gfx_set(0.2, 0.12, 0.12, 1) : gfx_set(0.12, 0.12, 0.12, 1);
+      gfx_rect(0, 0, mid_x, gfx_h);
+      slider2 < 22000 ? gfx_set(0.12, 0.14, 0.2, 1) : gfx_set(0.12, 0.12, 0.12, 1);
+      gfx_rect(mid_x, 0, gfx_w - mid_x, gfx_h);
+  ) : (
+      gfx_set(0.1, 0.1, 0.1, 1);
+      gfx_rect(0, 0, gfx_w, gfx_h);
+  );
+
+  gfx_set(0, 0, 0, 1);
+  gfx_line(mid_x, 0, mid_x, gfx_h);
+
+
+  // -- HELPER FUNCTIONS --
+  function draw_btn_label(label, bx, bw, by) (
+      gfx_measurestr(label, lw, lh);
+      gfx_x = bx + (bw - lw)*0.5;
+      gfx_y = by + 2;
+      gfx_drawstr(label);
+  );
+  function handle_hpf_menu(target_slider) (
+      gfx_x = mouse_x; gfx_y = mouse_y;
+      selection = gfx_showmenu("20|30|40|50|60|70|80|90|100|120|150|200|250|300");
+      selection > 0 ? (
+          selection == 1 ? val = 20 : selection == 2 ? val = 30 : selection == 3 ? val = 40 :
+          selection == 4 ? val = 50 : selection == 5 ? val = 60 : selection == 6 ? val = 70 :
+          selection == 7 ? val = 80 : selection == 8 ? val = 90 : selection == 9 ? val = 100 :
+          selection == 10 ? val = 120 : selection == 11 ? val = 150 : selection == 12 ? val = 200 :
+          selection == 13 ? val = 250 : selection == 14 ? val = 300;
+          
+          target_slider == 10 ? slider10 = val : target_slider == 11 ? slider11 = val :
+          target_slider == 12 ? slider12 = val : target_slider == 13 ? slider13 = val :
+          target_slider == 14 ? slider14 = val;
+      );
+  );
+  function handle_lpf_menu(target_slider) (
+      gfx_x = mouse_x; gfx_y = mouse_y;
+      selection = gfx_showmenu("3k|4k|5k|6k|7k|8k|9k|10k|11k|12k|13k|14k|15k|16k|18k|20k");
+      selection > 0 ? (
+          selection == 1 ? val = 3000 : selection == 2 ? val = 4000 : selection == 3 ? val = 5000 :
+          selection == 4 ? val = 6000 : selection == 5 ? val = 7000 : selection == 6 ? val = 8000 :
+          selection == 7 ? val = 9000 : selection == 8 ? val = 10000 : selection == 9 ? val = 11000 :
+          selection == 10 ? val = 12000 : selection == 11 ? val = 13000 : selection == 12 ? val = 14000 :
+          selection == 13 ? val = 15000 : selection == 14 ? val = 16000 : selection == 15 ? val = 18000 :
+          selection == 16 ? val = 20000;
+
+          target_slider == 20 ? slider20 = val : target_slider == 21 ? slider21 = val :
+          target_slider == 22 ? slider22 = val : target_slider == 23 ? slider23 = val :
+          target_slider == 24 ? slider24 = val;
+      );
+  );
+
+
+  // -- MOUSE LOGIC --
+  mouse_cap & 3 ? (
+    is_right_click = (mouse_cap & 2) == 2;
+    last_cap == 0 ? ( 
+        init_mouse_y = mouse_y;
+        init_hpf = slider1;
+        init_lpf = slider2;
+        button_clicked = 0; 
+        
+        // 1. POWER BUTTON
+        abs(mouse_x - mid_x) < 20 && mouse_y < 25 && !is_right_click ? (
+            slider3 = (slider3 == 0 ? 1 : 0);
+            bypass = slider3;
+            slider_automate(slider3);
+            button_clicked = 1;
+        ) : (
+            // 2. PRESET BUTTONS
+            is_btn_zone = (show_buttons && mouse_y > text_area_h);
+            is_btn_zone ? (
+               button_clicked = 1; 
+               margin_side=4; spacing=2; num_btns=5;
+               avail_w = mid_x - (margin_side*2);
+               bw = max(10, (avail_w - (spacing*(num_btns-1)))/num_btns);
+               
+               mouse_x < mid_x ? (
+                  bx = margin_side;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(10) : (slider1=slider10; slider_automate(slider1)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(11) : (slider1=slider11; slider_automate(slider1)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(12) : (slider1=slider12; slider_automate(slider1)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(13) : (slider1=slider13; slider_automate(slider1)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(14) : (slider1=slider14; slider_automate(slider1)); ); 
+               ) : (
+                  bx = mid_x + margin_side;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(20) : (slider2=slider20; slider_automate(slider2)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(21) : (slider2=slider21; slider_automate(slider2)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(22) : (slider2=slider22; slider_automate(slider2)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(23) : (slider2=slider23; slider_automate(slider2)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(24) : (slider2=slider24; slider_automate(slider2)); );
+               );
+               init_hpf = slider1; init_lpf = slider2;
+            );
+        );
+    );
+
+    // DRAG LOGIC (Left Click Only) - ABSOLUTE MODE
+    button_clicked == 0 && !is_right_click ? (
+       dist_y = (init_mouse_y - mouse_y);
+       
+       mouse_x < mid_x ? ( 
+         new_val = init_hpf + (dist_y * 3);
+         slider1 = max(0, min(1000, new_val));
+         slider_automate(slider1);
+       ) : ( 
+         new_val = init_lpf + (dist_y * 50);
+         step = 200; snapped_val = floor(new_val / step + 0.5) * step;
+         slider2 = max(1000, min(22000, snapped_val));
+         slider_automate(slider2);
+       );
+    );
+  );
+  
+  last_mouse_x = mouse_x; last_mouse_y = mouse_y; last_cap = mouse_cap & 3;
+
+
+  // -- RENDER LEFT (HPF) --
+  cx = mid_x * 0.5; 
+  title_cy = title_area_h * 0.5;
+  value_cy = title_area_h + (value_area_h * 0.5);
+
+  bypass == 0 ? gfx_set(0.5, 0.5, 0.5, 1) : gfx_set(0.3, 0.3, 0.3, 1);
+  gfx_setfont(4); gfx_measurestr("HPF", tw, th);
+  gfx_x = cx - tw*0.5; gfx_y = title_cy - th*0.5; gfx_drawstr("HPF");
+
+  bypass == 0 ? gfx_set(0.9, 0.9, 0.9, 1) : gfx_set(0.4, 0.4, 0.4, 1);
+  slider1 > 0 ? (
+      sprintf(#str_val, "%d", slider1);
+      gfx_setfont(1); gfx_measurestr(#str_val, w_val, h_val);
+      gfx_setfont(2); gfx_measurestr("Hz", w_unit, h_unit);
+      total_w = w_val + w_unit + 4;
+      start_x = cx - (total_w * 0.5);
+      
+      gfx_setfont(1); gfx_x = start_x; gfx_y = value_cy - h_val*0.5; gfx_drawstr(#str_val);
+      gfx_setfont(2); gfx_x = start_x + w_val + 2; gfx_y = value_cy - h_unit*0.5 + h_unit*0.25; gfx_drawstr("Hz");
+  ) : (
+      gfx_setfont(1); gfx_set(0.5, 0.5, 0.5, 1);
+      gfx_measurestr("OFF", w_off, h_off);
+      gfx_x = cx - w_off*0.5; gfx_y = value_cy - h_off*0.5; gfx_drawstr("OFF");
+  );
+
+  // -- RENDER RIGHT (LPF) --
+  cx = mid_x + (mid_x * 0.5);
+
+  bypass == 0 ? gfx_set(0.5, 0.5, 0.5, 1) : gfx_set(0.3, 0.3, 0.3, 1);
+  gfx_setfont(4); gfx_measurestr("LPF", tw, th);
+  gfx_x = cx - tw*0.5; gfx_y = title_cy - th*0.5; gfx_drawstr("LPF");
+
+  bypass == 0 ? gfx_set(0.9, 0.9, 0.9, 1) : gfx_set(0.4, 0.4, 0.4, 1);
+  slider2 < 22000 ? (
+      sprintf(#str_val, "%.1f", slider2/1000);
+      gfx_setfont(1); gfx_measurestr(#str_val, w_val, h_val);
+      gfx_setfont(2); gfx_measurestr("k", w_unit, h_unit);
+      total_w = w_val + w_unit + 4;
+      start_x = cx - (total_w * 0.5);
+      
+      gfx_setfont(1); gfx_x = start_x; gfx_y = value_cy - h_val*0.5; gfx_drawstr(#str_val);
+      gfx_setfont(2); gfx_x = start_x + w_val + 2; gfx_y = value_cy - h_unit*0.5 + h_unit*0.25; gfx_drawstr("k");
+  ) : (
+      gfx_setfont(1); gfx_set(0.5, 0.5, 0.5, 1);
+      gfx_measurestr("OFF", w_off, h_off);
+      gfx_x = cx - w_off*0.5; gfx_y = value_cy - h_off*0.5; gfx_drawstr("OFF");
+  );
+
+  // -- RENDER BUTTONS --
+  show_buttons ? (
+      gfx_setfont(3);
+      margin_side=4; spacing=2; num_btns=5;
+      avail_w = mid_x - (margin_side*2);
+      bw = max(10, (avail_w - (spacing*(num_btns-1)))/num_btns);
+      by = gfx_h - btn_h + 2; bh = btn_h - 4;
+      bypass == 1 ? ( btn_alpha = 0.3; ) : ( btn_alpha = 1; );
+
+      // Left
+      bx = margin_side;
+      val=slider10; slider1==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider11; slider1==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider12; slider1==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider13; slider1==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider14; slider1==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+
+      // Right
+      bx = mid_x + margin_side;
+      val=slider20; slider2==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider21; slider2==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider22; slider2==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider23; slider2==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+      val=slider24; slider2==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+  );
+
+  // -- RENDER POWER BUTTON --
+  bypass == 0 ? gfx_set(0, 1, 0, 1) : gfx_set(1, 0, 0, 1);
+  cx = mid_x; cy = 12; r = 6;
+  gfx_circle(cx, cy, r, 1);
+  gfx_set(0, 0, 0, 1);
+  gfx_circle(cx, cy, r-2, 0); gfx_line(cx, cy-r+2, cx, cy);
