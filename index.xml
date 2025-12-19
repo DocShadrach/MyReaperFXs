@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="29564c3b2d97d6eaaed71770eb94a2c4c1c68447">
+<index version="1" name="DocShadrach FXs" commit="4d9627bab246254dd01f3818324d4e219a81ef49">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -143,6 +143,22 @@ A simple plugin to add depth to the elements of a mix.
     <version name="1.0.0" author="Doc Shadrach" time="2025-12-13T09:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
     <source file="The_Depth_Control.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/2f7a26aab99889c7275626101eb622eb0a7ce658/The_Depth_Control.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="RBJ_Filters.jsfx" type="effect" desc="RBJ Filters for TCP (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+RBJ Filters for TCP
+======================
+Author: Doc Shadrach
+
+High pass and low pass filters to embed in the TCP.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-19T07:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="RBJ_Filters.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/4d9627bab246254dd01f3818324d4e219a81ef49/RBJ_Filters.jsfx</source>
     </version>
     </reapack>
  </category>
