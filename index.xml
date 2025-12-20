@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="4d9627bab246254dd01f3818324d4e219a81ef49">
+<index version="1" name="DocShadrach FXs" commit="b6f92b22fcc0f65c4597502bacfc4a346bde39b0">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -159,6 +159,22 @@ High pass and low pass filters to embed in the TCP.
     <version name="1.0.0" author="Doc Shadrach" time="2025-12-19T07:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
     <source file="RBJ_Filters.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/4d9627bab246254dd01f3818324d4e219a81ef49/RBJ_Filters.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="The_Best_DeEsser.jsfx" type="effect" desc="The Best DeEsser (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+The Best DeEsser
+======================
+Author: Doc Shadrach
+
+A precision deesser based on the Airwindows DeBess code.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-20T07:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="The_Best_DeEsser.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/b6f92b22fcc0f65c4597502bacfc4a346bde39b0/The_Best_DeEsser.jsfx</source>
     </version>
     </reapack>
  </category>
