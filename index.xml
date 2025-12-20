@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="0301f2efbf2c35ee5de87ccd0341a951a2ef238a">
+<index version="1" name="DocShadrach FXs" commit="7aa047d89d9d084cfbe65d1ce1aa1e8beba16651">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -179,6 +179,22 @@ A precision deesser based on the Airwindows DeBess code.
     <version name="1.1.0" author="Doc Shadrach" time="2025-12-20T09:00:00Z">
      <changelog><![CDATA[Changed the direction of the Max Reduction slider.]]></changelog>
     <source file="The_Best_DeEsser.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/0301f2efbf2c35ee5de87ccd0341a951a2ef238a/The_Best_DeEsser.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="Speaker_Soul_Engine.jsfx" type="effect" desc="Speaker Soul Engine (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+Speaker Soul Engine
+======================
+Author: Doc Shadrach
+
+A plugin to bring guitar cabinet IRs to life and add realism.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-20T11:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="Speaker_Soul_Engine.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/7aa047d89d9d084cfbe65d1ce1aa1e8beba16651/Speaker_Soul_Engine.jsfx</source>
     </version>
     </reapack>
  </category>
