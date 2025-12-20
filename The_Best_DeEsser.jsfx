@@ -1,0 +1,210 @@
+desc: The Best DeEsser (DocShadrach)
+// version 1.0
+// Ported and enhanced from Airwindows DeBess
+// Original algorithm by Chris Johnson (www.airwindows.com)
+// 
+// License: MIT License
+// Copyright (c) 2024 Airwindows
+
+slider1:0<0,1,0.01>Sensitivity (Intensity)
+slider2:0.5<0,1,0.01>Sibilance Focus (Sharpness)
+slider3:0.5<0,1,0.01>Max Reduction (Depth)
+slider4:0.5<0,1,0.01>Smoothing (Filter)
+slider5:0<0,1,1{Output (Processed),Delta (Sibilance Only)}>Monitor
+slider7:0<0,1,1{Off,On}>Relative Detection
+slider8:0<0,1,0.01>Stereo Link
+slider9:0<0,5,0.1>Lookahead (ms)
+slider10:0<0,1,0.01>Detection HP Bias
+slider11:0.1<0,0.5,0.01>Hysteresis
+
+@init
+// --- Memory Layout ---
+sL = 0;   sR = 100; // Slew buffers
+mL = 200; mR = 300; // Derivative buffers
+lookL = 1000;       // Lookahead L (0 to 4999)
+lookR = 6000;       // Lookahead R (0 to 4999)
+look_ptr = 0;
+buf_size = 5000;
+
+ratioAL = ratioBL = 1.0;
+iirSampleAL = iirSampleBL = 0.0;
+ratioAR = ratioBR = 1.0;
+iirSampleAR = iirSampleBR = 0.0;
+
+hp_L = hp_R = 0;
+flip = 0;
+denorm = 1.18 * pow(10, -23);
+dither = 1.18 * pow(10, -17);
+
+// Dither initialization
+fpdL = 1.0; while (fpdL < 16386) ( fpdL = rand(4294967295); );
+fpdR = 1.0; while (fpdR < 16386) ( fpdR = rand(4294967295); );
+
+sm_s1 = slider1; sm_s2 = slider2; sm_s3 = slider3; sm_s4 = slider4;
+gr_meter = 1.0; det_led = 0; env_follower = 0.05;
+
+@slider
+overallscale = srate / 44100.0;
+monitoring = slider5;
+rel_mode = slider7;
+s_link = slider8;
+look_samples = min(floor((slider9 / 1000) * srate), buf_size - 1);
+pdc_delay = look_samples;
+pdc_bot_ch = 0; pdc_top_ch = 2;
+hp_freq = slider10;
+hyst_amt = slider11;
+
+@sample
+// Parameter Smoothing
+sc = 1 - exp(-1 / (srate * 0.02)); 
+sm_s1 += (slider1 - sm_s1) * sc;
+sm_s2 += (slider2 - sm_s2) * sc;
+sm_s3 += (slider3 - sm_s3) * sc;
+sm_s4 += (slider4 - sm_s4) * sc;
+
+// Store current samples in Lookahead buffer
+lookL[look_ptr] = spl0;
+lookR[look_ptr] = spl1;
+
+// Retrieve delayed samples for processing
+delayed_L = lookL[(look_ptr - look_samples + buf_size) % buf_size];
+delayed_R = lookR[(look_ptr - look_samples + buf_size) % buf_size];
+look_ptr = (look_ptr + 1) % buf_size;
+
+// Detection Bias (HP Filter on sidechain ONLY)
+hp_L += (spl0 - hp_L) * (hp_freq * 0.5);
+hp_R += (spl1 - hp_R) * (hp_freq * 0.5);
+sideSampleL = spl0 - hp_L;
+sideSampleR = spl1 - hp_R;
+
+is_stereo = (spl0 != spl1);
+
+// Adaptive Threshold logic
+abs_picos = max(abs(spl0), abs(spl1));
+env_follower += (abs_picos - env_follower) * (abs_picos > env_follower ? 0.5 : 0.001);
+
+// --- CÁLCULOS DE PARÁMETROS ---
+// Intensity 100% original
+intensity = (sm_s1^5) * (8192 / overallscale); 
+sharpness = sm_s2 * 40.0;
+sharpness < 2 ? sharpness = 2;
+speed = 0.1 / sharpness;
+// Depth: Mantiene la sutileza en valores altos pero permite mucha más reducción en valores bajos
+depth_limit = 1.0 / ( (sm_s3 * sm_s3) + 0.00001); 
+
+// Use sideSample for detection buffers
+sL[0] = sideSampleL;
+sR[0] = sideSampleR;
+
+x = floor(sharpness);
+while (x > 0) (
+  sL[x] = sL[x-1];
+  sR[x] = sR[x-1];
+  x -= 1;
+);
+
+mL[1] = (sL[1] - sL[2]) * ((sL[1] - sL[2]) / 1.3);
+is_stereo ? ( mR[1] = (sR[1] - sR[2]) * ((sR[1] - sR[2]) / 1.3); );
+
+x = floor(sharpness - 1);
+while (x > 1) (
+  mL[x] = (sL[x] - sL[x+1]) * ((sL[x-1] - sL[x]) / 1.3);
+  is_stereo ? ( mR[x] = (sR[x] - sR[x+1]) * ((sR[x-1] - sR[x]) / 1.3); );
+  x -= 1;
+);
+
+senseL = abs(mL[1] - mL[2]) * sharpness * sharpness;
+is_stereo ? ( senseR = abs(mR[1] - mR[2]) * sharpness * sharpness; );
+
+x = floor(sharpness - 1);
+while (x > 0) (
+  multL = abs(mL[x] - mL[x+1]) * sharpness * sharpness;
+  multL < 1.0 ? senseL *= multL;
+  is_stereo ? (
+    multR = abs(mR[x] - mR[x+1]) * sharpness * sharpness;
+    multR < 1.0 ? senseR *= multR;
+  );
+  x -= 1;
+);
+
+!is_stereo ? senseR = senseL;
+
+// Stereo Link
+is_stereo ? (
+    linked_sense = max(senseL, senseR);
+    senseL += (linked_sense - senseL) * s_link;
+    senseR += (linked_sense - senseR) * s_link;
+);
+
+rel_mode ? (
+    comp_factor = 1.0 / (env_follower + 0.001);
+    senseL *= (comp_factor * 0.15); 
+    senseR *= (comp_factor * 0.15);
+);
+
+max(senseL, senseR) > 0.5 ? det_led = 1.0 : det_led *= 0.9998; 
+
+senseL = 1.0 + (intensity * intensity * senseL);
+senseR = 1.0 + (intensity * intensity * senseR);
+
+senseL > intensity ? senseL = intensity;
+senseR > intensity ? senseR = intensity;
+
+// Hysteresis calculation
+target_speed_L = (senseL < ratioAL) ? speed * (1.0 - hyst_amt) : speed;
+target_speed_R = (senseR < ratioAR) ? speed * (1.0 - hyst_amt) : speed;
+
+// Interleaved IIR filtering acting on DELAYED raw samples
+flip ? (
+  iirSampleAL = (iirSampleAL * (1 - iirAmount)) + (delayed_L * iirAmount);
+  ratioAL = (ratioAL * (1.0 - target_speed_L)) + (senseL * target_speed_L);
+  ratioAL > depth_limit ? ratioAL = depth_limit;
+  processedL = ratioAL > 1.0 ? iirSampleAL + ((delayed_L - iirSampleAL) / ratioAL) : delayed_L;
+  
+  iirSampleAR = (iirSampleAR * (1 - iirAmount)) + (delayed_R * iirAmount);
+  ratioAR = (ratioAR * (1.0 - target_speed_R)) + (senseR * target_speed_R);
+  ratioAR > depth_limit ? ratioAR = depth_limit;
+  processedR = ratioAR > 1.0 ? iirSampleAR + ((delayed_R - iirSampleAR) / ratioAR) : delayed_R;
+) : (
+  iirSampleBL = (iirSampleBL * (1 - iirAmount)) + (delayed_L * iirAmount);
+  ratioBL = (ratioBL * (1.0 - target_speed_L)) + (senseL * target_speed_L);
+  ratioBL > depth_limit ? ratioBL = depth_limit;
+  processedL = ratioBL > 1.0 ? iirSampleBL + ((delayed_L - iirSampleBL) / ratioBL) : delayed_L;
+  
+  iirSampleBR = (iirSampleBR * (1 - iirAmount)) + (delayed_R * iirAmount);
+  ratioBR = (ratioBR * (1.0 - target_speed_R)) + (senseR * target_speed_R);
+  ratioBR > depth_limit ? ratioBR = depth_limit;
+  processedR = ratioBR > 1.0 ? iirSampleBR + ((delayed_R - iirSampleBR) / ratioBR) : delayed_R;
+);
+flip = 1 - flip;
+
+current_max_ratio = max(max(ratioAL, ratioBL), max(ratioAR, ratioBR));
+gr_meter = min(gr_meter, 1.0 / current_max_ratio);
+
+monitoring > 0.49999 ? (
+  processedL = delayed_L - processedL;
+  processedR = delayed_R - processedR;
+);
+
+// Dither
+fpdL = (fpdL ^ (fpdL << 13)) & 0xFFFFFFFF; fpdL = (fpdL ^ (fpdL >> 17)) & 0xFFFFFFFF; fpdL = (fpdL ^ (fpdL << 5)) & 0xFFFFFFFF;
+fpdR = (fpdR ^ (fpdR << 13)) & 0xFFFFFFFF; fpdR = (fpdR ^ (fpdR >> 17)) & 0xFFFFFFFF; fpdR = (fpdR ^ (fpdR << 5)) & 0xFFFFFFFF;
+
+spl0 = processedL; spl1 = processedR;
+
+@gfx 180 40
+gfx_r = 0.2; gfx_g = 0.8; gfx_b = 1.0; gfx_a = 0.8;
+meter_w = (1 - gr_meter) * gfx_w;
+gfx_rect(0, 0, meter_w, 12);
+det_led > 0.01 ? (
+  gfx_r = 1; gfx_g = 0.9; gfx_b = 0; gfx_a = det_led;
+  gfx_circle(gfx_w - 20, 25, 6, 1);
+  gfx_x = gfx_w - 85; gfx_y = 20;
+  gfx_drawstr("DETECT");
+);
+gr_db = 20 * log10(gr_meter);
+gfx_x = 5; gfx_y = 20; gfx_r = 0.8; gfx_g = 0.8; gfx_b = 0.8; gfx_a = 1.0;
+gr_db < -0.1 ? ( gfx_drawstr("Reduction: "); gfx_drawnumber(gr_db, 1); gfx_drawstr(" dB  "); );
+gfx_r = 0.4; is_stereo ? gfx_drawstr("[Stereo]") : gfx_drawstr("[Mono]");
+gr_meter += (1.0 - gr_meter) * 0.05;
+det_led *= 0.9;
