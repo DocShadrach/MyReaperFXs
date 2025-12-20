@@ -1,5 +1,5 @@
 desc: The Best DeEsser (DocShadrach)
-// version 1.0
+// version 1.1
 // Ported and enhanced from Airwindows DeBess
 // Original algorithm by Chris Johnson (www.airwindows.com)
 // 
@@ -89,8 +89,11 @@ intensity = (sm_s1^5) * (8192 / overallscale);
 sharpness = sm_s2 * 40.0;
 sharpness < 2 ? sharpness = 2;
 speed = 0.1 / sharpness;
-// Depth: Mantiene la sutileza en valores altos pero permite mucha más reducción en valores bajos
-depth_limit = 1.0 / ( (sm_s3 * sm_s3) + 0.00001); 
+
+// v1.1 FIX: Inversión de Slider 3 para UX intuitivo (1.0 = Max Reducción)
+// Invertimos el valor suavizado antes de aplicar la curva cuadrática
+inv_sm_s3 = 1.0 - sm_s3;
+depth_limit = 1.0 / ( (inv_sm_s3 * inv_sm_s3) + 0.00001); 
 
 // Use sideSample for detection buffers
 sL[0] = sideSampleL;
