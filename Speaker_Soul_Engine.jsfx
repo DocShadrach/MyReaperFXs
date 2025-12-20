@@ -1,0 +1,158 @@
+desc: Speaker Soul Engine (DocShadrach)
+// author: Doc Shadrach
+// version: 1.0
+// about: High-end mechanical speaker modeling.
+
+// SLIDERS
+slider1:t_stress=30<0,100,0.5>Speaker Stress (%)
+slider2:t_char=0<0,1,1{Organic Sag (Vintage),Tight Punch (Modern)}>Response Type
+slider3:t_thump=4<0,12,0.1>Mechanical Thump (dB)
+slider4:t_calib=0<-12,12,0.1>Drive Calibration (dB)
+slider5:t_break=40<0,100,1>High-End Taming (%)
+slider6:t_hp=70<20,200,1>Cabinet Clean Cut (Hz)
+slider7:t_out=0<-20,20,0.1>Output Level (dB)
+
+// CHANNELS
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+// Physical and DSP constants
+inv_srate = 1/srate;
+// Cone damping: aggressive attack, inertia-based release (95ms)
+atk = exp(-inv_srate / 0.004);
+rel = exp(-inv_srate / 0.095); 
+// Parameter smoothing coefficient (~25ms for click-free operation)
+smooth_coeff = exp(-inv_srate / 0.025);
+
+// Dual Mono state variables
+envL = 0; envR = 0;
+lpL = 0; lpR = 0;
+hpL = 0; hpR = 0;
+stateL = 0; stateR = 0;
+hL1 = 0; hL2 = 0; hR1 = 0; hR2 = 0;
+preL = 0; preR = 0;
+
+// Smoothed values initialization
+s_calib = 1; s_stress = 0; s_tgain = 0; s_brk = 0; s_out = 1; s_hp = 70;
+
+@slider
+// Convert targets for smoothed processing
+target_calib = 10^(t_calib / 20);
+target_stress = t_stress / 100;
+target_tgain = 10^(t_thump / 20) - 1;
+target_brk = t_break / 100;
+target_hp = t_hp;
+target_out = 10^(t_out / 20);
+character = t_char;
+
+@block
+// Resonance/Thump low-pass filter at 130Hz
+th_lp = exp(-2 * $pi * 130 * inv_srate);
+// Anti-aliasing pre-filter (smooth cut at 19kHz)
+aa_lp = exp(-2 * $pi * 19000 * inv_srate);
+
+@sample
+// 1. PARAMETER SMOOTHING (Anti-click engine)
+s_calib = s_calib * smooth_coeff + target_calib * (1 - smooth_coeff);
+s_stress = s_stress * smooth_coeff + target_stress * (1 - smooth_coeff);
+s_tgain = s_tgain * smooth_coeff + target_tgain * (1 - smooth_coeff);
+s_brk = s_brk * smooth_coeff + target_brk * (1 - smooth_coeff);
+s_hp = s_hp * smooth_coeff + target_hp * (1 - smooth_coeff);
+s_out = s_out * smooth_coeff + target_out * (1 - smooth_coeff);
+
+// 2. CABINET CLEAN CUT (12dB/oct Biquad HPF)
+w0 = 2 * $pi * s_hp * inv_srate;
+cosw0 = cos(w0);
+alpha = sin(w0) / 1.414;
+b0 = (1 + cosw0) / 2; b1 = -(1 + cosw0); b2 = (1 + cosw0) / 2;
+a0 = 1 + alpha; a1 = -2 * cosw0; a2 = 1 - alpha;
+
+osL = spl0; osR = spl1;
+spl0 = (b0/a0)*osL + hL1;
+hL1 = (b1/a0)*osL - (a1/a0)*spl0 + hL2;
+hL2 = (b2/a0)*osL - (a2/a0)*spl0;
+
+spl1 = (b0/a0)*osR + hR1;
+hR1 = (b1/a0)*osR - (a1/a0)*spl1 + hR2;
+hR2 = (b2/a0)*osR - (a2/a0)*spl1;
+
+// 3. INPUT DRIVE & ANTI-ALIASING PRE-FILTER
+sL = spl0 * s_calib; sR = spl1 * s_calib;
+preL = preL * aa_lp + sL * (1 - aa_lp);
+preR = preR * aa_lp + sR * (1 - aa_lp);
+dryL = sL; dryR = sR;
+
+// 4. MECHANICAL ENVELOPE (Mechanical inertia modeling)
+// Optimized scaling for -18dBFS nominal studio levels
+aL = abs(preL) * 4.5; aR = abs(preR) * 4.5;
+envL = (aL > envL) ? (aL * atk + envL * (1-atk)) : (envL * rel + aL * (1-rel));
+envR = (aR > envR) ? (aR * atk + envR * (1-atk)) : (envR * rel + aR * (1-rel));
+
+// 5. MECHANICAL STRESS ENGINE
+stL = min(envL * s_stress, 0.98); stR = min(envR * s_stress, 0.98);
+(character == 0) ? (
+  // VINTAGE: Asymmetric Mechanical Sag (Even harmonics warmness)
+  sL = (preL + 0.05 * stL * preL*preL) / (1.0 + abs(preL) * stL * 0.45);
+  sR = (preR + 0.05 * stR * preR*preR) / (1.0 + abs(preR) * stR * 0.45);
+) : (
+  // MODERN: Coil Tension (Cubic saturation / 3rd harmonics)
+  sL = preL * (1.0 - stL * 0.22) + ( (preL*preL*preL * 0.35) * stL );
+  sR = preR * (1.0 - stR * 0.22) + ( (preR*preR*preR * 0.35) * stR );
+);
+
+// 6. DYNAMIC TAME (Reactive Low-Pass Filtering)
+// Ranges from 18kHz down to 5.5kHz based on stress
+dL = 18000 - (stL * s_brk * 12500); dR = 18000 - (stR * s_brk * 12500);
+cL = exp(-2 * $pi * dL * inv_srate); cR = exp(-2 * $pi * dR * inv_srate);
+stateL = stateL * cL + sL * (1 - cL); stateR = stateR * cR + sR * (1 - cR);
+
+// 7. MECHANICAL THUMP (Air pressure reconstruction)
+lpL = lpL * th_lp + dryL * (1 - th_lp); lpR = lpR * th_lp + dryR * (1 - th_lp);
+tL = lpL * s_tgain * (stL * 1.2); tR = lpR * s_tgain * (stR * 1.2);
+
+// 8. FINAL RECONSTRUCTION & ANTI-DC PROTECTION
+spl0 = (stateL + tL) * s_out; spl1 = (stateR + tR) * s_out;
+hpL = hpL * 0.9995 + spl0 * 0.0005; hpR = hpR * 0.9995 + spl1 * 0.0005;
+spl0 -= hpL; spl1 -= hpR;
+
+// GFX DATA PACKING
+gfx_envL = envL; gfx_envR = envR;
+gfx_tamingL = (18000 - dL) / 12500; gfx_tamingR = (18000 - dR) / 12500;
+
+@gfx 560 170
+// PROFESSIONAL UI DESIGN
+gfx_clear = 15 + 15*256 + 18*65536; 
+
+function draw_ui(val, tame, x, y, label) (
+  meter_w = 300; meter_h = 18;
+  // Meter background
+  gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(x, y, meter_w, meter_h);
+  // Sweet Zone highlight
+  gfx_set(0.2, 0.5, 0.2, 0.3); gfx_rect(x + (meter_w * 0.6), y, meter_w * 0.3, meter_h);
+  // Main stress bar (Dynamic coloring)
+  fill_w = min(val * (meter_w / 1.5), meter_w); 
+  val < 0.6 ? gfx_set(0, 0.6, 0.9, 1) : val < 1.1 ? gfx_set(0.4, 1, 0.4, 1) : gfx_set(1, 0.3, 0, 1);
+  gfx_rect(x, y + 2, fill_w, meter_h - 4);
+  // High-end taming bar (Red indicator)
+  gfx_set(1, 0.2, 0.2, 0.6);
+  gfx_rect(x + meter_w - (tame * meter_w), y + meter_h + 2, tame * meter_w, 3);
+  // Independent channel labels (Aligned)
+  gfx_set(0.7, 0.7, 0.7, 1); gfx_x = x - 80; gfx_y = y + 3; gfx_drawstr(label);
+  val >= 0.6 && val <= 1.1 ? ( gfx_set(0.4, 1, 0.4, 1); gfx_x = x + meter_w + 20; gfx_y = y + 3; gfx_drawstr("SWEET SPOT"); );
+);
+
+// Plugin Title
+gfx_set(1, 1, 1, 0.15); gfx_x = 180; gfx_y = 15; gfx_setfont(1, "Arial", 18, 'b');
+gfx_drawstr("SPEAKER SOUL ENGINE");
+
+// Render Dual Mono Visuals
+draw_ui(gfx_envL, gfx_tamingL, 90, 55, "LEFT");
+draw_ui(gfx_envR, gfx_tamingR, 90, 85, "RIGHT");
+
+// Technical Footer
+gfx_set(0.4, 0.4, 0.4, 1); gfx_x = 160; gfx_y = 135; gfx_setfont(1, "Arial", 12);
+gfx_drawstr("MECHANICAL STRESS & CONE EXCURSION METER");
+gfx_x = 185; gfx_y = 150; gfx_drawstr("RED LINE: HIGH-END TAMING ACTIVE");
