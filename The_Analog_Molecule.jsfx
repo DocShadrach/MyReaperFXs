@@ -16,7 +16,7 @@ slider4:t_flux=25<0,100,0.5>3D Flux (Phase Depth) %
 slider5:t_thermal=25<0,100,0.5>Thermal Bloom (Inertia) %
 slider6:t_analog=35<0,100,1>Analog Texture (Interstage) %
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
-slider8:t_bypass=0<0,1,1{Active,Bypassed}>Bypass State
+slider8:t_bypass=0<0,1,1{Active,Bypassed}>Global State
 slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
 // Persistence flag
 slider64:s_init_done=0<0,1,1>-
