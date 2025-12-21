@@ -197,6 +197,22 @@ A plugin to bring guitar cabinet IRs to life and add realism.
     <source file="Speaker_Soul_Engine.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/7aa047d89d9d084cfbe65d1ce1aa1e8beba16651/Speaker_Soul_Engine.jsfx</source>
     </version>
     </reapack>
+
+    <reapack name="The_Analog_Molecule.jsfx" type="effect" desc="The Analog Molecule (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+The Analog Molecule
+======================
+Author: Doc Shadrach
+
+Professional 180-Channel 3D Console Emulator.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-21T07:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/def6342b4613e3bd2ba1d9cf16ab4d0e42ab90e4/The_Analog_Molecule.jsfx</source>
+    </version>
+    </reapack>
  </category>
 
 </index>
