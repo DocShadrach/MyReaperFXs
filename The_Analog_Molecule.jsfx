@@ -1,0 +1,312 @@
+desc: The Analog Molecule (DocShadrach)
+// author: Doc Shadrach
+// version: 1.0
+// about: Professional 180-Channel 3D Console Emulator.
+// 
+// This plugin uses DSP algorithms by Chris Johnson (Airwindows)
+// derived from 'Interstage' and 'Console9', released under the MIT License.
+// Global network and thermal bloom architecture by Doc Shadrach.
+
+options:gmem=AnalogMoleculeNetwork
+
+slider1:t_id=1<1,180,1>Analog Channel ID
+slider2:t_topo=0<0,2,1{Channel (Discrete),Bus (Transformer),Master (Main Leader)}>Topology
+slider3:t_calib_mode=1<0,1,1{Hot (0dB),Normal (-4dB)}>Bus Calibration
+slider4:t_flux=25<0,100,0.5>3D Flux (Phase Depth) %
+slider5:t_thermal=25<0,100,0.5>Thermal Bloom (Inertia) %
+slider6:t_analog=35<0,100,1>Analog Texture (Interstage) %
+slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
+slider8:t_bypass=0<0,1,1{Active,Bypassed}>Bypass State
+slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
+// Persistence flag
+slider64:s_init_done=0<0,1,1>-
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+// Engineering Constants
+inv_srate = 1/srate;
+overallscale = srate / 44100.0;
+firstStage = 0.381966011250105 / overallscale;
+iirAmount = 0.00295 / overallscale;
+ist_threshold_base = 0.381966011250105;
+smooth = exp(-inv_srate / 0.045);
+thermal_rel = exp(-inv_srate / 2.5);
+
+instance_id = rand(1000000) + 1; 
+last_global_sync = gmem[0];
+last_global_bypass = gmem[7];
+last_global_xtalk = gmem[21];
+last_global_calib = gmem[22];
+
+// State variables
+istL_A1=0; istL_B1=0; istL_A2=0; istL_B2=0; istL_A3=0; istL_B3=0;
+istR_A1=0; istR_B1=0; istR_A2=0; istR_B2=0; istR_A3=0; istR_B3=0;
+lastL=0; lastR=0; flip=0; heatL=0; heatR=0; apL=0; apR=0; hpL=0; hpR = 0;
+s_flux=0; s_thermal=0; s_analog=0; s_calib=1; s_out = 1; s_bypass=1;
+meter_input = 0;
+g_clock = 0;
+m_watchdog = 0;
+has_master = 0;
+
+// Crosstalk filters
+xt_lp=0; xt_hp=0;
+xt_gain = 10^(-75/20); // -75dB of induction
+
+@slider
+gmem[7] = t_bypass;
+gmem[21] = t_xtalk; 
+gmem[22] = t_calib_mode; // Broadcast calibration mode
+last_global_bypass = t_bypass;
+last_global_xtalk = t_xtalk;
+last_global_calib = t_calib_mode;
+
+unit_seed = t_id / 180;
+cluster_id = floor((t_id - 1) / 18); 
+
+// Hierarchical Headroom Offset Logic:
+topo_offset = 0.0;
+t_topo == 1 ? (
+  topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0;
+);
+t_topo == 2 ? topo_offset = -8.0; 
+
+target_calib = 10^((t_drive + topo_offset) / 20);
+target_out = 10^(-(t_drive + topo_offset) / 20);
+target_bypass = 1.0 - t_bypass; 
+
+@block
+// 1. PERSISTENT AUTO-ID ALLOCATION
+s_init_done == 0 ? ( 
+  t_topo < 2 ? (
+    my_slot = atomic_add(gmem[1], 1); 
+    t_id = ((my_slot * 37) % 180) + 1; 
+  ) : ( t_id = 1; );
+  slider_automate(t_id); 
+  unit_seed = t_id / 180;
+  cluster_id = floor((t_id - 1) / 18);
+  s_init_done = 1; 
+);
+
+// 2. TRUE RANDOM NETWORK SYNC LOGIC
+gmem[0] != last_global_sync ? (
+  t_topo < 2 ? (
+    my_index = atomic_add(gmem[1], 1);
+    t_id = ((my_index * 37 + gmem[11]) % 180) + 1;
+    slider_automate(t_id); 
+    unit_seed = t_id / 180;
+    cluster_id = floor((t_id - 1) / 18);
+  );
+  last_global_sync = gmem[0];
+);
+
+// 2.5 DYNAMIC MASTER LEADERSHIP & HEARTBEAT
+t_topo == 2 ? (
+  gmem[30] = instance_id; 
+  gmem[31] += 1; 
+  has_master = 1;
+) : (
+  gmem[30] == instance_id ? gmem[30] = 0; 
+);
+
+// Watchdog
+gmem[31] != last_h_tick ? (
+  has_master = 1;
+  last_h_tick = gmem[31];
+  m_watchdog = 0;
+) : (
+  m_watchdog += 1;
+  m_watchdog > 30 ? has_master = 0; 
+);
+
+// Auto-demote
+t_topo == 2 && gmem[30] != instance_id ? (
+  t_topo = 1;
+  slider_automate(t_topo);
+  topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0;
+  target_calib = 10^((t_drive + topo_offset) / 20);
+  target_out = 10^(-(t_drive + topo_offset) / 20);
+);
+
+// Global Network Listeners
+gmem[7] != last_global_bypass ? ( t_bypass = gmem[7]; last_global_bypass = gmem[7]; slider_automate(t_bypass); );
+gmem[21] != last_global_xtalk ? ( t_xtalk = gmem[21]; last_global_xtalk = t_xtalk; slider_automate(t_xtalk); );
+
+gmem[22] != last_global_calib ? ( 
+  t_calib_mode = gmem[22]; 
+  last_global_calib = t_calib_mode; 
+  slider_automate(t_calib_mode); 
+  // Recalculate coefficients if calibration mode changes globally
+  t_topo == 1 ? topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0;
+  t_topo == 2 ? topo_offset = -8.0;
+  t_topo == 0 ? topo_offset = 0.0;
+  target_calib = 10^((t_drive + topo_offset) / 20);
+  target_out = 10^(-(t_drive + topo_offset) / 20);
+);
+
+target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
+topology_interstage = t_topo == 0 ? 1.0 : 0.7; 
+topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
+
+@sample
+// 3. CAPTURE & SMOOTHING
+rawL = spl0; rawR = spl1;
+s_flux = s_flux * smooth + target_flux * (1 - smooth);
+s_thermal = s_thermal * smooth + target_thermal * (1 - smooth);
+s_analog = s_analog * smooth + target_analog * (1 - smooth);
+s_calib = s_calib * smooth + target_calib * (1 - smooth);
+s_out = s_out * smooth + target_out * (1 - smooth);
+s_bypass = s_bypass * smooth + target_bypass * (1 - smooth);
+
+// 4. INPUT STAGING & METERING
+sL = rawL * s_calib; sR = rawR * s_calib;
+dryL = sL; dryR = sR;
+peak = max(abs(sL), abs(sR));
+meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_input * 0.9992 + peak * 0.0008);
+
+// NETWORK CLOCK & CROSSTALK CLEAR
+g_clock += 1;
+gmem[220] != g_clock ? (
+  gmem[220] = g_clock;
+  xi = 0; loop(10, gmem[200 + xi] = 0; xi += 1; );
+);
+
+// ACTIVE PROCESSING GATE
+(abs(sL) > 0.000000001 || abs(sR) > 0.000000001 || heatL > 0.000001 || heatR > 0.000001) ? (
+
+  // 4.5 ANALOG CROSSTALK ENGINE
+  t_xtalk ? (
+    xt_mono = (sL + sR) * 0.5;
+    xt_lp = xt_lp * 0.85 + xt_mono * 0.15;
+    xt_hp = xt_hp * 0.98 + xt_lp * 0.02;
+    xt_final = xt_lp - xt_hp;
+    atomic_add(gmem[200 + cluster_id], xt_final);
+    xt_sum = gmem[200 + cluster_id];
+    xt_leak = (xt_sum - xt_final) * xt_gain;
+    sL += xt_leak; sR += xt_leak;
+  );
+
+  // 6. 3D FLUX ENGINE
+  flux_freq = 16500 - (unit_seed * (6500 * topology_flux_depth)); 
+  flux_coeff = (1 - s_flux * 0.12) * (flux_freq * inv_srate);
+  apL_in = sL; sL = (apL_in * (flux_coeff - 1) + apL) / (1 + flux_coeff); apL = apL_in + sL * flux_coeff;
+  apR_in = sR; sR = (apR_in * (flux_coeff - 1) + apR) / (1 + flux_coeff); apR = apR_in + sR * flux_coeff;
+
+  // 7. INTERSTAGE SLEW LIMITING
+  shared_sag = 1.0 / (1.0 + gmem[10] * 0.04);
+  slew_t = ist_threshold_base * (2.05 - s_analog) * shared_sag * topology_interstage; 
+  inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
+
+  (flip == 0) ? (
+    istL_A1 = (istL_A1 * (1 - firstStage)) + (inL * firstStage); inL = istL_A1;
+    istL_A2 = (istL_A2 * (1 - iirAmount)) + (inL * iirAmount); inL = istL_A2;
+    istL_A3 = (istL_A3 * (1 - iirAmount)) + (inL * iirAmount); inputL = istL_A3;
+    sL = dryL - (inputL * s_analog);
+    (sL - istL_A1 > slew_t) ? sL = istL_A1 + slew_t : (sL - istL_A1 < -slew_t) ? sL = istL_A1 - slew_t;
+    istR_A1 = (istR_A1 * (1 - firstStage)) + (inR * firstStage); inR = istR_A1;
+    istR_A2 = (istR_A2 * (1 - iirAmount)) + (inR * iirAmount); inR = istR_A2;
+    istR_A3 = (istR_A3 * (1 - iirAmount)) + (inR * iirAmount); inputR = istR_A3;
+    sR = dryR - (inputR * s_analog);
+    (sR - istR_A1 > slew_t) ? sR = istR_A1 + slew_t : (sR - istR_A1 < -slew_t) ? sR = istR_A1 - slew_t;
+  ) : (
+    istL_B1 = (istL_B1 * (1 - firstStage)) + (inL * firstStage); inL = istL_B1;
+    istL_B2 = (istL_B2 * (1 - iirAmount)) + (inL * iirAmount); inL = istL_B2;
+    istL_B3 = (istL_B3 * (1 - iirAmount)) + (inL * iirAmount); inputL = istL_B3;
+    sL = dryL - (inputL * s_analog);
+    (sL - istL_B1 > slew_t) ? sL = istL_B1 + slew_t : (sL - istL_B1 < -slew_t) ? sL = istL_B1 - slew_t;
+    istR_B1 = (istR_B1 * (1 - firstStage)) + (inR * firstStage); inR = istR_B1;
+    istR_B2 = (istR_B2 * (1 - iirAmount)) + (inR * iirAmount); inR = istR_B2;
+    istR_B3 = (istR_B3 * (1 - iirAmount)) + (inR * iirAmount); inputR = istR_B3;
+    sR = dryR - (inputR * s_analog);
+    (sR - istR_B1 > slew_t) ? sR = istR_B1 + slew_t : (sR - istR_B1 < -slew_t) ? sR = istR_B1 - slew_t;
+  );
+  flip = 1 - flip; lastL = sL; lastR = sR;
+
+  // 8. THERMAL BLOOM & ASYMPTOTIC SATURATION
+  absL = abs(sL); absR = abs(sR);
+  heatL = (absL > heatL) ? (absL * 0.05 + heatL * 0.95) : (heatL * thermal_rel + absL * (1 - thermal_rel));
+  heatR = (absR > heatR) ? (absR * 0.05 + heatR * 0.95) : (heatR * thermal_rel + absR * (1 - thermal_rel));
+  bloomL = 1.0 + (heatL * s_thermal * (t_topo == 0 ? 0.5 : 0.6));
+  bloomR = 1.0 + (heatR * s_thermal * (t_topo == 0 ? 0.5 : 0.6));
+  sL *= 0.618; sL_target = 1.0 - min(abs(sL), 0.999); 
+  (sL > 0.0) ? sL = -(exp(log(sL_target) * (1.618 * bloomL)) - 1) : sL = exp(log(1 + sL) * (1.618 * bloomL)) - 1;
+  sR *= 0.618; sR_target = 1.0 - min(abs(sR), 0.999); 
+  (sR > 0.0) ? sR = -(exp(log(sR_target) * (1.618 * bloomR)) - 1) : sR = exp(log(1 + sR) * (1.618 * bloomR)) - 1;
+);
+
+// 5. SHARED POWER RAIL
+current_energy = (abs(sL) + abs(sR)) * 0.5;
+atomic_add(gmem[10], current_energy * 0.000015); 
+global_rail = gmem[10];
+t_topo == 2 ? gmem[10] *= 0.998; 
+
+// 9. FINAL & DC FILTER
+procL = sL * s_out; procR = sR * s_out;
+hpL = hpL * 0.9999 + procL * 0.0001; hpR = hpR * 0.9999 + procR * 0.0001;
+procL -= hpL; procR -= hpR;
+spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass));
+spl1 = (procR * s_bypass) + (rawR * (1 - s_bypass));
+
+@gfx 550 320
+gfx_clear = 28 + 28*256 + 30*65536; 
+
+function draw_meter(val, x, y, w, h, label, color_mode) (
+  gfx_set(0.1, 0.1, 0.12, 1); gfx_rect(x, y, w, h); 
+  v = min(val, 1.0);
+  color_mode == 0 ? gfx_set(0, 0.7, 1, 1) : gfx_set(1, 0.5, 0, 1); 
+  gfx_rect(x, y, v*w, h); 
+  color_mode == 0 ? ( gfx_set(1, 1, 1, 0.8); gfx_rect(x + w * 0.8 - 1, y - 4, 2, h + 8); );
+  gfx_set(1, 1, 1, 0.4); gfx_setfont(1, "Arial", 12);
+  gfx_x = x; gfx_y = y - 18; gfx_drawstr(label);
+);
+
+function draw_button(x, y, w, h, active, label, r, g, b) (
+  gfx_set(0.15, 0.15, 0.18, 1); gfx_rect(x, y, w, h); 
+  gfx_set(1, 1, 1, 0.05); gfx_line(x, y, x+w, y); 
+  active ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
+  gfx_set(1, 1, 1, active ? 1 : 0.4);
+  gfx_setfont(1, "Arial", 13, 'b');
+  gfx_measurestr(label, lw, lh);
+  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
+  gfx_drawstr(label);
+);
+
+gfx_set(1, 1, 1, 0.1); gfx_x = 10; gfx_y = 15; gfx_setfont(1, "Arial", 28, 'b');
+gfx_drawstr("THE ANALOG MOLECULE");
+
+draw_meter(min(meter_input * 6.5, 1), 50, 75, 450, 12, "CIRCUIT DRIVE STRENGTH", 0);
+
+draw_button(50, 120, 450, 35, t_bypass == 0, t_bypass == 0 ? "MOLECULAR NETWORK: ACTIVE" : "GLOBAL BYPASS ENGAGED", 0, 1, 0.5);
+(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 120 && mouse_y <= 155) ? ( t_bypass = 1 - t_bypass; gmem[7] = t_bypass; slider_automate(t_bypass); );
+
+draw_button(50, 170, 450, 35, t_xtalk == 1, t_xtalk == 1 ? "ANALOG CROSSTALK: ON" : "ANALOG CROSSTALK: OFF", 0.8, 0.4, 1);
+(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 170 && mouse_y <= 205) ? ( t_xtalk = 1 - t_xtalk; gmem[21] = t_xtalk; slider_automate(t_xtalk); );
+
+draw_button(50, 220, 450, 35, 0, "RANDOMIZE CONSOLE TOPOLOGY", 0.4, 0.7, 1);
+(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 220 && mouse_y <= 255) ? ( 
+  gmem[11] = floor(rand(1000)); 
+  gmem[1] = 0; 
+  gmem[0] += 1; 
+);
+
+has_master == 0 ? (
+  gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 13, 'b');
+  warn_s = "WARNING: NO MASTER DETECTED (NETWORK SAG INACTIVE)";
+  gfx_measurestr(warn_s, ww, wh);
+  gfx_x = 50 + (450 - ww)/2; gfx_y = 265;
+  gfx_drawstr(warn_s);
+);
+
+gfx_set(1, 1, 1, 0.05); gfx_rect(50, 285, 450, 1);
+gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
+topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
+cal_str = (t_topo == 1) ? (t_calib_mode == 0 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
+status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal_str, cluster_id + 1);
+gfx_measurestr(status_str, sw, sh);
+gfx_x = 50 + (450 - sw)/2; gfx_y = 295;
+gfx_drawstr(status_str);
+
+last_cap = mouse_cap;
