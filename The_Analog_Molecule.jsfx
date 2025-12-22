@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.1
+// version: 1.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -51,12 +51,25 @@ meter_input = 0;
 g_clock = 0;
 m_watchdog = 0;
 has_master = 0;
+last_topo = t_topo;
 
 // Crosstalk filters
 xt_lp=0; xt_hp=0;
 xt_gain = 10^(-75/20); // -75dB of induction
 
 @slider
+// Auto-Preset Logic based on Topology
+t_topo != last_topo ? (
+  t_topo == 0 ? ( t_flux = 25; t_thermal = 25; t_analog = 35; ) : 
+  t_topo == 1 ? ( t_flux = 15; t_thermal = 35; t_analog = 25; ) : 
+  t_topo == 2 ? ( t_flux = 10; t_thermal = 25; t_analog = 15; );
+  
+  slider_automate(t_flux);
+  slider_automate(t_thermal);
+  slider_automate(t_analog);
+  last_topo = t_topo;
+);
+
 gmem[7] = t_bypass;
 gmem[21] = t_xtalk; 
 gmem[22] = t_calib_mode; // Broadcast calibration mode
