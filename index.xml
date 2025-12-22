@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="b586a7aea10ec2c85d1ed64915143706d5f35ba3">
+<index version="1" name="DocShadrach FXs" commit="3a89728cd7bee093db38d16fb8bdfe6864c474c7">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -215,6 +215,10 @@ Professional 180-Channel 3D Console Emulator.
     <version name="1.1.0" author="Doc Shadrach" time="2025-12-21T09:00:00Z">
      <changelog><![CDATA[Bypass State now is called Global State.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/b586a7aea10ec2c85d1ed64915143706d5f35ba3/The_Analog_Molecule.jsfx</source>
+    </version>
+    <version name="1.2.0" author="Doc Shadrach" time="2025-12-21T11:00:00Z">
+     <changelog><![CDATA[Added auto-preset logic based on topology.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/3a89728cd7bee093db38d16fb8bdfe6864c474c7/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
  </category>
