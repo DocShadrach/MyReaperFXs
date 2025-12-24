@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="3a89728cd7bee093db38d16fb8bdfe6864c474c7">
+<index version="1" name="DocShadrach FXs" commit="5d2d7adabd8df52225a93f622e4c90f101fffcd7">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -219,6 +219,22 @@ Professional 180-Channel 3D Console Emulator.
     <version name="1.2.0" author="Doc Shadrach" time="2025-12-21T11:00:00Z">
      <changelog><![CDATA[Added auto-preset logic based on topology.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/3a89728cd7bee093db38d16fb8bdfe6864c474c7/The_Analog_Molecule.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="The_Hot_Summer.jsfx" type="effect" desc="The Hot Summer (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+The Hot Summer
+======================
+Author: Doc Shadrach
+
+A 16-ch Analog-Like Stem Summer.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2025-12-24T11:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/5d2d7adabd8df52225a93f622e4c90f101fffcd7/The_Hot_Summer.jsfx</source>
     </version>
     </reapack>
  </category>
