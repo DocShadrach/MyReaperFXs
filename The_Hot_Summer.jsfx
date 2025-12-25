@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.1
+// version: 1.2
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -52,6 +52,10 @@ dith_const = 1.1 * pow(10, -44);
 half_pi = 1.57079632679;
 fade_smooth = exp(-inv_srate / 0.005); 
 denorm = 0.000000000000001; 
+
+// Calibrated Coils2 IIR for sample rate independence
+// 0.0015 is the reference at 48kHz
+c2_iir_val = 0.0015 * (48000.0 * inv_srate);
 
 // LED Threshold calibrated to -90dB (0.0000316)
 led_thresh = 0.0000316;
@@ -501,7 +505,7 @@ t_topo == 0 ? (
         c2_dR = proc_sumR / c2_scale;
         
         // 3. Magnetic Hysteresis (IIR Filter)
-        c2_iir = 0.0015; // Fixed high-quality weight
+        c2_iir = c2_iir_val; // SCALED IIR
         
         h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
         h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
@@ -544,7 +548,7 @@ t_topo == 0 ? (
       c2_dL = proc_sumL / c2_scale;
       c2_dR = proc_sumR / c2_scale;
       
-      c2_iir = 0.0015;
+      c2_iir = c2_iir_val; // SCALED IIR
       
       h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
       h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
