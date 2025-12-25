@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.3
+// version: 1.4
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -18,6 +18,8 @@ slider6:t_analog=35<0,100,1>Analog Texture (Interstage) %
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
 slider8:t_bypass=0<0,1,1{Active,Bypassed}>Global State
 slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
+// Master Control for XT Mode
+slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Master XT Mode
 // Persistence flag
 slider64:s_init_done=0<0,1,1>-
 
@@ -41,6 +43,7 @@ last_global_sync = gmem[0];
 last_global_bypass = gmem[7];
 last_global_xtalk = gmem[21];
 last_global_calib = gmem[22];
+last_global_xt_mode = gmem[23]; 
 
 // State variables
 istL_A1=0; istL_B1=0; istL_A2=0; istL_B2=0; istL_A3=0; istL_B3=0;
@@ -57,10 +60,11 @@ last_topo = t_topo;
 energy_accum = 0;
 buffered_rail = 0;
 rail_target = 0;
+xt_leak = 0; 
 
 // Crosstalk filters
 xt_lp=0; xt_hp=0;
-xt_gain = 10^(-75/20); // -75dB of induction
+xt_gain = 10^(-75/20); 
 
 @slider
 // Auto-Preset Logic based on Topology
@@ -77,10 +81,14 @@ t_topo != last_topo ? (
 
 gmem[7] = t_bypass;
 gmem[21] = t_xtalk; 
-gmem[22] = t_calib_mode; // Broadcast calibration mode
+gmem[22] = t_calib_mode; 
+// If I am Master, I broadcast the mode
+t_topo == 2 ? ( gmem[23] = t_xt_mode; );
+
 last_global_bypass = t_bypass;
 last_global_xtalk = t_xtalk;
 last_global_calib = t_calib_mode;
+last_global_xt_mode = gmem[23];
 
 unit_seed = t_id / 180;
 cluster_id = floor((t_id - 1) / 18); 
@@ -126,6 +134,7 @@ t_topo == 2 ? (
   gmem[30] = instance_id; 
   gmem[31] += 1; 
   has_master = 1;
+  gmem[23] = t_xt_mode; 
 ) : (
   gmem[30] == instance_id ? gmem[30] = 0; 
 );
@@ -153,6 +162,17 @@ t_topo == 2 && gmem[30] != instance_id ? (
 gmem[7] != last_global_bypass ? ( t_bypass = gmem[7]; last_global_bypass = gmem[7]; slider_automate(t_bypass); );
 gmem[21] != last_global_xtalk ? ( t_xtalk = gmem[21]; last_global_xtalk = t_xtalk; slider_automate(t_xtalk); );
 
+// XT MODE LISTENER
+gmem[23] != last_global_xt_mode ? (
+  t_topo != 2 ? ( t_xt_mode = gmem[23]; slider_automate(t_xt_mode); );
+  last_global_xt_mode = gmem[23];
+);
+
+// CALCULATE CROSSTALK GAIN
+target_xt_db = (t_xt_mode == 0) ? -75.0 : (t_xt_mode == 1) ? -95.0 : -115.0;
+xt_gain = 10^(target_xt_db/20);
+
+
 gmem[22] != last_global_calib ? ( 
   t_calib_mode = gmem[22]; 
   last_global_calib = t_calib_mode; 
@@ -170,13 +190,15 @@ topology_interstage = t_topo == 0 ? 1.0 : 0.7;
 topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
 
 // OPTIMIZED RAIL COMMUNICATION
-// Send accumulated energy to network once per block instead of per sample
-atomic_add(gmem[10], energy_accum * 0.000015);
+// Send accumulated energy to network once per block
+// FIX v1.5/1.6: If bypassed, DO NOT contribute to rail sag
+t_bypass == 0 ? (
+  atomic_add(gmem[10], energy_accum * 0.000015);
+);
 energy_accum = 0;
 
-// Master Decay Logic (Corrected for Block Size)
+// Master Decay Logic
 t_topo == 2 ? (
-  // Equivalent to 0.998 per sample over the whole block
   gmem[10] *= pow(0.998, samplesblock);
 );
 rail_target = gmem[10];
@@ -204,11 +226,15 @@ gmem[220] != g_clock ? (
   xi = 0; loop(10, gmem[200 + xi] = 0; xi += 1; );
 );
 
+// SECURITY CLEAR
+xt_leak = 0;
+
 // ACTIVE PROCESSING GATE
 (abs(sL) > 0.000000001 || abs(sR) > 0.000000001 || heatL > 0.000001 || heatR > 0.000001) ? (
 
   // 4.5 ANALOG CROSSTALK ENGINE
-  t_xtalk ? (
+  // FIX v1.6: Strict Logic Gate - If bypassed, no Crosstalk Calculation
+  (t_xtalk && t_bypass == 0) ? (
     xt_mono = (sL + sR) * 0.5;
     xt_lp = xt_lp * 0.85 + xt_mono * 0.15;
     xt_hp = xt_hp * 0.98 + xt_lp * 0.02;
@@ -226,7 +252,6 @@ gmem[220] != g_clock ? (
   apR_in = sR; sR = (apR_in * (flux_coeff - 1) + apR) / (1 + flux_coeff); apR = apR_in + sR * flux_coeff;
 
   // 7. INTERSTAGE SLEW LIMITING
-  // Optimized: Using smoothed local rail instead of gmem access
   shared_sag = 1.0 / (1.0 + buffered_rail * 0.04);
   slew_t = ist_threshold_base * (2.05 - s_analog) * shared_sag * topology_interstage; 
   inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
@@ -269,15 +294,20 @@ gmem[220] != g_clock ? (
 );
 
 // 5. SHARED POWER RAIL (OPTIMIZED)
-// Accumulate locally and interpolate state, NO ATOMIC_ADD here
-current_energy = (abs(sL) + abs(sR)) * 0.5;
-energy_accum += current_energy; 
+// FIX v1.5/1.6: Gated energy accumulation
+// If bypassed, we do NOT contribute to the global rail load.
+t_bypass == 0 ? (
+  current_energy = (abs(sL) + abs(sR)) * 0.5;
+  energy_accum += current_energy; 
+);
 buffered_rail = buffered_rail * 0.995 + rail_target * 0.005;
 
 // 9. FINAL & DC FILTER
 procL = sL * s_out; procR = sR * s_out;
 hpL = hpL * 0.9999 + procL * 0.0001; hpR = hpR * 0.9999 + procR * 0.0001;
 procL -= hpL; procR -= hpR;
+// GLOBAL BYPASS FINAL OUTPUT CHECK
+// If bypassed, spl0/1 = rawL/R. Physically impossible for crosstalk to leak.
 spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass));
 spl1 = (procR * s_bypass) + (rawR * (1 - s_bypass));
 
@@ -295,10 +325,12 @@ function draw_meter(val, x, y, w, h, label, color_mode) (
 );
 
 function draw_button(x, y, w, h, active, label, r, g, b) (
-  gfx_set(0.15, 0.15, 0.18, 1); gfx_rect(x, y, w, h); 
+  // NEW: active state 2 forces color on background WITHOUT DIMMING (v1.9)
+  active == 2 ? gfx_set(r, g, b, 1) : gfx_set(0.15, 0.15, 0.18, 1);
+  gfx_rect(x, y, w, h); 
   gfx_set(1, 1, 1, 0.05); gfx_line(x, y, x+w, y); 
-  active ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
-  gfx_set(1, 1, 1, active ? 1 : 0.4);
+  active == 1 ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
+  gfx_set(1, 1, 1, active == 1 ? 1 : 0.4);
   gfx_setfont(1, "Arial", 13, 'b');
   gfx_measurestr(label, lw, lh);
   gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
@@ -310,14 +342,47 @@ gfx_drawstr("THE ANALOG MOLECULE");
 
 draw_meter(min(meter_input * 6.5, 1), 50, 75, 450, 12, "CIRCUIT DRIVE STRENGTH", 0);
 
-draw_button(50, 120, 450, 35, t_bypass == 0, t_bypass == 0 ? "MOLECULAR NETWORK: ACTIVE" : "GLOBAL BYPASS ENGAGED", 0, 1, 0.5);
+// MODIFIED COLOR LOGIC: RED if Bypassed (t_bypass==1), GREEN if Active (t_bypass==0)
+r_col = t_bypass == 1 ? 1 : 0;
+g_col = t_bypass == 1 ? 0.2 : 1;
+b_col = t_bypass == 1 ? 0.2 : 0.5;
+draw_button(50, 120, 450, 35, 1, t_bypass == 0 ? "MOLECULAR NETWORK: ACTIVE" : "GLOBAL BYPASS ENGAGED", r_col, g_col, b_col);
 (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 120 && mouse_y <= 155) ? ( t_bypass = 1 - t_bypass; gmem[7] = t_bypass; slider_automate(t_bypass); );
 
-draw_button(50, 170, 450, 35, t_xtalk == 1, t_xtalk == 1 ? "ANALOG CROSSTALK: ON" : "ANALOG CROSSTALK: OFF", 0.8, 0.4, 1);
+// CROSSTALK: Grey if Global Bypass is active, else Purple/Blue
+is_xt_visually_active = (t_xtalk == 1 && t_bypass == 0);
+draw_button(50, 170, 450, 35, is_xt_visually_active, t_xtalk == 1 ? "ANALOG CROSSTALK: ON" : "ANALOG CROSSTALK: OFF", 0.8, 0.4, 1);
 (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 170 && mouse_y <= 205) ? ( t_xtalk = 1 - t_xtalk; gmem[21] = t_xtalk; slider_automate(t_xtalk); );
 
-draw_button(50, 220, 450, 35, 0, "RANDOMIZE CONSOLE TOPOLOGY", 0.4, 0.7, 1);
-(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 220 && mouse_y <= 255) ? ( 
+t_topo == 2 ? (
+  mode_name = (t_xt_mode == 0) ? "MODE: VINTAGE (-75dB)" : (t_xt_mode == 1) ? "MODE: MODERN (-95dB)" : "MODE: BOUTIQUE (-115dB)";
+  
+  // LOGIC FIX v1.10: If XT is OFF or Bypassed, show Gray (State 0), else show Blue (State 2)
+  xt_mode_state = (t_xtalk == 1 && t_bypass == 0) ? 2 : 0;
+  
+  // Draw Button with Conditional State
+  draw_button(50, 207, 450, 20, xt_mode_state, mode_name, 0.2, 0.35, 0.7);
+  
+  (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 207 && mouse_y <= 227) ? ( 
+    t_xt_mode = (t_xt_mode + 1) % 3; 
+    slider_automate(t_xt_mode);
+    gmem[23] = t_xt_mode; 
+  );
+  r_y = 235;
+) : (
+  gfx_set(1, 1, 1, 0.3); gfx_setfont(1, "Arial", 11);
+  slave_mode = (t_xt_mode == 0) ? "VINTAGE" : (t_xt_mode == 1) ? "MODERN" : "BOUTIQUE";
+  info_s = sprintf(#, "XT MODE SYNC: %s", slave_mode);
+  gfx_measurestr(info_s, iw, ih);
+  gfx_x = 50 + (450 - iw)/2; gfx_y = 210;
+  gfx_drawstr(info_s);
+  r_y = 230;
+);
+
+// MODIFIED: GREY BUTTON (State 0), SHORTER (380px), CENTERED
+// X calculation: 275 - 190 = 85.
+draw_button(85, r_y, 380, 35, 0, "RANDOMIZE CONSOLE TOPOLOGY", 0, 0, 0);
+(mouse_cap & 1 && !last_cap && mouse_x >= 85 && mouse_x <= 465 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
   gmem[11] = floor(rand(1000)); 
   gmem[1] = 0; 
   gmem[0] += 1; 
@@ -327,17 +392,17 @@ has_master == 0 ? (
   gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 13, 'b');
   warn_s = "WARNING: NO MASTER DETECTED (NETWORK SAG INACTIVE)";
   gfx_measurestr(warn_s, ww, wh);
-  gfx_x = 50 + (450 - ww)/2; gfx_y = 265;
+  gfx_x = 50 + (450 - ww)/2; gfx_y = 275;
   gfx_drawstr(warn_s);
 );
 
-gfx_set(1, 1, 1, 0.05); gfx_rect(50, 285, 450, 1);
+gfx_set(1, 1, 1, 0.05); gfx_rect(50, 295, 450, 1);
 gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
 topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
 cal_str = (t_topo == 1) ? (t_calib_mode == 0 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
 status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal_str, cluster_id + 1);
 gfx_measurestr(status_str, sw, sh);
-gfx_x = 50 + (450 - sw)/2; gfx_y = 295;
+gfx_x = 50 + (450 - sw)/2; gfx_y = 305;
 gfx_drawstr(status_str);
 
 last_cap = mouse_cap;
