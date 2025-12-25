@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.2
+// version: 1.3
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -52,6 +52,11 @@ g_clock = 0;
 m_watchdog = 0;
 has_master = 0;
 last_topo = t_topo;
+
+// Optimization Buffers
+energy_accum = 0;
+buffered_rail = 0;
+rail_target = 0;
 
 // Crosstalk filters
 xt_lp=0; xt_hp=0;
@@ -164,6 +169,18 @@ target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_
 topology_interstage = t_topo == 0 ? 1.0 : 0.7; 
 topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
 
+// OPTIMIZED RAIL COMMUNICATION
+// Send accumulated energy to network once per block instead of per sample
+atomic_add(gmem[10], energy_accum * 0.000015);
+energy_accum = 0;
+
+// Master Decay Logic (Corrected for Block Size)
+t_topo == 2 ? (
+  // Equivalent to 0.998 per sample over the whole block
+  gmem[10] *= pow(0.998, samplesblock);
+);
+rail_target = gmem[10];
+
 @sample
 // 3. CAPTURE & SMOOTHING
 rawL = spl0; rawR = spl1;
@@ -209,7 +226,8 @@ gmem[220] != g_clock ? (
   apR_in = sR; sR = (apR_in * (flux_coeff - 1) + apR) / (1 + flux_coeff); apR = apR_in + sR * flux_coeff;
 
   // 7. INTERSTAGE SLEW LIMITING
-  shared_sag = 1.0 / (1.0 + gmem[10] * 0.04);
+  // Optimized: Using smoothed local rail instead of gmem access
+  shared_sag = 1.0 / (1.0 + buffered_rail * 0.04);
   slew_t = ist_threshold_base * (2.05 - s_analog) * shared_sag * topology_interstage; 
   inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
 
@@ -250,11 +268,11 @@ gmem[220] != g_clock ? (
   (sR > 0.0) ? sR = -(exp(log(sR_target) * (1.618 * bloomR)) - 1) : sR = exp(log(1 + sR) * (1.618 * bloomR)) - 1;
 );
 
-// 5. SHARED POWER RAIL
+// 5. SHARED POWER RAIL (OPTIMIZED)
+// Accumulate locally and interpolate state, NO ATOMIC_ADD here
 current_energy = (abs(sL) + abs(sR)) * 0.5;
-atomic_add(gmem[10], current_energy * 0.000015); 
-global_rail = gmem[10];
-t_topo == 2 ? gmem[10] *= 0.998; 
+energy_accum += current_energy; 
+buffered_rail = buffered_rail * 0.995 + rail_target * 0.005;
 
 // 9. FINAL & DC FILTER
 procL = sL * s_out; procR = sR * s_out;
