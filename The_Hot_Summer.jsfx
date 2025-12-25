@@ -1,9 +1,9 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0
+// version: 1.1
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
-// This plugin incorporates DSP concepts (ASIN/SIN Console logic) 
+// This plugin incorporates some DSP concepts
 // derived from Airwindows by Chris Johnson, used under MIT License.
 // Global network and physical rail architecture by Doc Shadrach.
 //
@@ -16,7 +16,7 @@ slider3:t_stem=0<0,7,1{Stem 1 (3-4),Stem 2 (5-6),Stem 3 (7-8),Stem 4 (9-10),Stem
 slider4:t_drive=0<-12,18,0.1>Compensated Drive (dB)
 slider5:t_stress=20<0,100,1>Bus Stress (Voltage Sag) %
 slider6:t_xtalk=8<0,100,1>Inductive Crosstalk %
-slider7:t_iron=20<0,100,1>Transformer Weight (Iron) %
+slider7:t_iron=15<0,80,1>Transformer Weight (Iron) %
 slider8:t_delta=0<0,1,1{Normal Sum,Delta Monitor}>Signal Monitoring
 slider9:t_inertia=250<1,1000,1>Rail Inertia (ms)
 slider10:t_bypass=0<0,1,1{Active Physical Summing,Clean Digital Sum}>Summing Mode
@@ -247,7 +247,9 @@ target_drive = pow(10, t_drive/20);
 target_xtalk_gain = (t_xtalk/100) * 0.05; 
 target_iron_gain = (t_iron / 100);
 s_stress_mult = (t_stress / 100) * 5.0; 
-s_out_gain = pow(10, (t_out_gain - 1.5) / 20); 
+
+// INTERNAL GAIN OFFSET -6.0dB Total (-3.5 previous + -2.5 requested)
+s_out_gain = pow(10, (t_out_gain - 6.0) / 20); 
 
 stem_bias_L = (t_stem - 3.2) * 0.01; 
 stem_bias_R = (t_stem - 3.8) * 0.01; 
@@ -486,14 +488,35 @@ t_topo == 0 ? (
         proc_sumL *= s_drive; proc_sumR *= s_drive;
         proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
         proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
-        h_hystL = h_hystL * 0.997 + proc_sumL * 0.003;
-        h_hystR = h_hystR * 0.997 + proc_sumR * 0.003;
-        proc_sumL += (proc_sumL - h_hystL) * s_iron_gain * 0.12;
-        proc_sumR += (proc_sumR - h_hystR) * s_iron_gain * 0.12;
-        h_c = (actual_mode == 1) ? 0.65 : 0.82;
-        hL = hL * h_c + proc_sumL * (1-h_c); hR = hR * h_c + proc_sumR * (1-h_c);
-        proc_sumL += (proc_sumL - hL) * s_iron_gain * 1.1; 
-        proc_sumR += (proc_sumR - hR) * s_iron_gain * 1.1;
+        
+        // --- COILS2 "HIGH-END" PORT START (No Filters) ---
+        
+        // 1. Calculate Distortion Scaling
+        c2_sat = s_iron_gain * 0.95; 
+        c2_scale = (1.0 - c2_sat); c2_scale *= c2_scale; 
+        c2_scale = max(c2_scale, 0.001); 
+        
+        // 2. Drive the core (Difference generation)
+        c2_dL = proc_sumL / c2_scale;
+        c2_dR = proc_sumR / c2_scale;
+        
+        // 3. Magnetic Hysteresis (IIR Filter)
+        c2_iir = 0.0015; // Fixed high-quality weight
+        
+        h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
+        h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
+        
+        c2_dL = max(min(c2_dL, 1.57), -1.57);
+        c2_dR = max(min(c2_dR, 1.57), -1.57);
+        h_hystL = max(min(h_hystL, 1.57), -1.57);
+        h_hystR = max(min(h_hystR, 1.57), -1.57);
+        
+        // 4. Apply Magnetic Non-Linearity
+        proc_sumL += (sin(c2_dL) - sin(h_hystL)) * c2_scale;
+        proc_sumR += (sin(c2_dR) - sin(h_hystR)) * c2_scale;
+        
+        // --- COILS2 "HIGH-END" PORT END ---
+
         r_off = (1.0 - rail_smooth) * 0.12;
         xL = max(min(proc_sumL * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2L = exp(2*xL); proc_sumL = (e2L-1)/(e2L+1);
         xR = max(min(proc_sumR * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2R = exp(2*xR); proc_sumR = (e2R-1)/(e2R+1);
@@ -511,14 +534,30 @@ t_topo == 0 ? (
       proc_sumL *= s_drive; proc_sumR *= s_drive;
       proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
       proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
-      h_hystL = h_hystL * 0.997 + proc_sumL * 0.003;
-      h_hystR = h_hystR * 0.997 + proc_sumR * 0.003;
-      proc_sumL += (proc_sumL - h_hystL) * s_iron_gain * 0.12;
-      proc_sumR += (proc_sumR - h_hystR) * s_iron_gain * 0.12;
-      h_c = (actual_mode == 1) ? 0.65 : 0.82;
-      hL = hL * h_c + proc_sumL * (1-h_c); hR = hR * h_c + proc_sumR * (1-h_c);
-      proc_sumL += (proc_sumL - hL) * s_iron_gain * 1.1; 
-      proc_sumR += (proc_sumR - hR) * s_iron_gain * 1.1;
+      
+      // --- COILS2 "HIGH-END" PORT START (No Filters) ---
+      c2_sat = s_iron_gain * 0.95; 
+      
+      c2_scale = (1.0 - c2_sat); c2_scale *= c2_scale; 
+      c2_scale = max(c2_scale, 0.001); 
+      
+      c2_dL = proc_sumL / c2_scale;
+      c2_dR = proc_sumR / c2_scale;
+      
+      c2_iir = 0.0015;
+      
+      h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
+      h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
+      
+      c2_dL = max(min(c2_dL, 1.57), -1.57);
+      c2_dR = max(min(c2_dR, 1.57), -1.57);
+      h_hystL = max(min(h_hystL, 1.57), -1.57);
+      h_hystR = max(min(h_hystR, 1.57), -1.57);
+      
+      proc_sumL += (sin(c2_dL) - sin(h_hystL)) * c2_scale;
+      proc_sumR += (sin(c2_dR) - sin(h_hystR)) * c2_scale;
+      // --- COILS2 "HIGH-END" PORT END ---
+
       r_off = (1.0 - rail_smooth) * 0.12;
       xL = max(min(proc_sumL * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2L = exp(2*xL); proc_sumL = (e2L-1)/(e2L+1);
       xR = max(min(proc_sumR * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2R = exp(2*xR); proc_sumR = (e2R-1)/(e2R+1);
