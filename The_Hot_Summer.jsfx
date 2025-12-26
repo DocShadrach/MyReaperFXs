@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.2
+// version: 1.3
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -53,23 +53,19 @@ half_pi = 1.57079632679;
 fade_smooth = exp(-inv_srate / 0.005); 
 denorm = 0.000000000000001; 
 
-// Calibrated Coils2 IIR for sample rate independence
-// 0.0015 is the reference at 48kHz
 c2_iir_val = 0.0015 * (48000.0 * inv_srate);
-
-// LED Threshold calibrated to -90dB (0.0000316)
 led_thresh = 0.0000316;
 
-// Parameter Smoothing Coeffs
-param_smooth = exp(-inv_srate / 0.040); // 40ms smoothing for heavy params
+param_smooth = exp(-inv_srate / 0.040); 
 energy_smooth_coeff = exp(-inv_srate / 0.020);
 
-// Null Hunter State
 nh_att = exp(-1/(srate * 0.1)); 
 sum_wdL = 0; sum_wwL = 0;
 sum_wdR = 0; sum_wwR = 0;
 
+// State variables
 lastL = 0; lastR = 0;
+last_sumL = 0; last_sumR = 0; 
 hL = 0; hR = 0;
 rail_smooth = 1.0;
 local_railL = 1.0; local_railR = 1.0; 
@@ -80,14 +76,25 @@ m_watchdog = 0;
 has_master = 0;
 last_master_tick = -1;
 last_topo = -1;
-last_initialized_os = -1; // Force init
-
+last_initialized_os = -1; 
 h_hystL = 0; h_hystR = 0;
 
-// ------------------------------------------------------------------
-// FIR SINC OVERSAMPLING ENGINE
-// ------------------------------------------------------------------
+// Optimization Cache
+last_active_stems = -1;
+cached_headroom = 1.0;
 
+// Force update on first block
+last_global_bypass = -1;
+last_global_delta = -1;
+last_global_inertia = -1;
+last_global_os = -1;
+
+s_drive = 1.0;
+s_recovery = 1.0;
+s_iron_gain = 0.0;
+s_xtalk_gain = 0.0;
+
+// OVERSAMPLING FUNCTIONS
 function sinc(fir, nt, bw, g)
   local(a, ys, yg, yw, i, pibw2, pifc2, pidnt2, hnt)
   global()
@@ -116,7 +123,7 @@ function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
     loc     = 0;
     coeffs  = targetmem;
     nTaps   = N*nHist;
-    memset(coeffs,0,4000); // Clear memory
+    memset(coeffs,0,4000); 
     sinc(tmp, nTaps, .5/N, .5*N);
     iFilt = 0; 
     delta = 0; 
@@ -207,7 +214,7 @@ function getSubSample()
     out
   );
 
-// Memory Allocation for Sinc
+// MEMORY ALLOCATION & CLEANUP
 freemem = 0;
 active_map = freemem; freemem += 8;
 stem_vol = freemem; freemem += 8; 
@@ -220,19 +227,23 @@ xtR_f2_arr = freemem; freemem += 8;
 stem_energy_smooth_arr = freemem; freemem += 8;
 drift_seed = freemem; freemem += 8;
 
-// FIR Buffers
+i = 0; loop(8,
+  active_map[i]=0; stem_vol[i]=0; stem_mute[i]=0; stem_solo[i]=0;
+  xtL_f1_arr[i]=0; xtL_f2_arr[i]=0; xtR_f1_arr[i]=0; xtR_f2_arr[i]=0;
+  stem_energy_smooth_arr[i]=0; drift_seed[i]=rand(1);
+  i+=1; 
+);
+
 mem_up_coeffs   = freemem; freemem += 4000;
 mem_down_coeffs = freemem; freemem += 4000;
 mem_tmp         = freemem; freemem += 4000;
 mem_hist_dL     = freemem; freemem += 256;
 mem_hist_dR     = freemem; freemem += 256;
 
-i=0; loop(8, drift_seed[i] = rand(1); i+=1; );
 fpdL = 16386 + rand(2147483647); 
 fpdR = 16386 + rand(2147483647); 
 
 @slider
-// Dynamic Visibility
 t_topo == 0 ? (
   slider_show(16 | 32 | 64 | 256 | 1024, 0); 
   slider_show(4 | 8, 1);
@@ -246,13 +257,10 @@ gmem[17] = t_delta;
 gmem[18] = t_inertia;
 gmem[19] = t_os; 
 
-// Target values for smoothing
 target_drive = pow(10, t_drive/20);
 target_xtalk_gain = (t_xtalk/100) * 0.05; 
 target_iron_gain = (t_iron / 100);
 s_stress_mult = (t_stress / 100) * 5.0; 
-
-// INTERNAL GAIN OFFSET -6.0dB Total (-3.5 previous + -2.5 requested)
 s_out_gain = pow(10, (t_out_gain - 6.0) / 20); 
 
 stem_bias_L = (t_stem - 3.2) * 0.01; 
@@ -262,20 +270,20 @@ rail_inertia_coeff = exp(-inv_srate / (max(t_inertia, 1) / 1000));
 local_inertiaL = rail_inertia_coeff * (0.99 + (t_stem * 0.001));
 local_inertiaR = rail_inertia_coeff * (0.98 + (t_stem * 0.002));
 
-// Initialize Filters - ONLY IF CHANGED
+// Initialize Filters
 t_os != last_initialized_os ? (
   t_os > 0 ? (
     os_N = (t_os == 1) ? 2 : 4;
     upL.updateSincFilter(os_N, 8, mem_up_coeffs, mem_tmp);
     upR.coeffs = mem_up_coeffs; 
     
-    // 32 taps for downsampling = High Quality
     ds_taps = 32;
     downL.updateSincDownsampleFilter(os_N, ds_taps, mem_down_coeffs);
-    downR.coeffs = mem_down_coeffs;
+    downR.coeffs = mem_down_coeffs; 
     
     downL.initDownsampleHist(mem_hist_dL, ds_taps);
     downR.initDownsampleHist(mem_hist_dR, ds_taps);
+    upL.resetSincUp(); upR.resetSincUp();
   );
   last_initialized_os = t_os;
 );
@@ -296,10 +304,8 @@ gmem[18] != last_global_inertia ? (
   local_inertiaR = rail_inertia_coeff * (0.98 + (t_stem * 0.002));
 );
 
-// Global Oversampling Sync & Re-Init
 gmem[19] != last_global_os ? ( 
   t_os = gmem[19]; slider_automate(t_os); last_global_os = t_os; 
-  // Recalc only on change
   t_os != last_initialized_os ? (
     t_os > 0 ? (
       os_N = (t_os == 1) ? 2 : 4;
@@ -319,7 +325,7 @@ gmem[19] != last_global_os ? (
 drift_mod = sin(time_precise() * 0.05) * 0.001 + (1.0 - gmem[20]) * 0.0025; 
 
 t_topo == 1 ? (
-  g_tick = (gmem[100] += 1);
+  g_tick = atomic_add(gmem[100], 1);
   any_solo = 0;
   ki = 0; loop(8,
     active_map[ki] = (g_tick - gmem[200 + ki] < 5) ? 1 : 0;
@@ -329,13 +335,12 @@ t_topo == 1 ? (
   g_mode_force = (t_mode == 4) ? 0 : t_mode;
   gmem[15] = g_mode_force;
 ) : (
-  master_clock = gmem[100];
+  master_clock = gmem[100]; 
   gmem[200 + t_stem] = master_clock;
   master_clock == last_master_tick ? ( m_watchdog += 1; m_watchdog > 30 ? has_master = 0 : has_master = 1; ) : ( m_watchdog = 0; last_master_tick = master_clock; has_master = 1; );
 );
 
 @sample
-// Parameter Smoothing for High-End feel
 s_drive = s_drive * param_smooth + target_drive * (1.0 - param_smooth);
 s_recovery = 1.0 / s_drive;
 s_iron_gain = s_iron_gain * param_smooth + target_iron_gain * (1.0 - param_smooth);
@@ -354,37 +359,63 @@ headroom_offset = pow(10, -t_drive / 60);
 // TOPOLOGY 0: STEM SENDER
 // --------------------------------------------------------------------------------
 t_topo == 0 ? (
-  local_drift = (drift_seed[t_stem] * drift_mod);
-  cur_energy = max(abs(spl0), abs(spl1));
-  stem_energy_smooth_arr[t_stem] = stem_energy_smooth_arr[t_stem] * energy_smooth_coeff + cur_energy * (1.0 - energy_smooth_coeff);
   
-  energy_factor = (actual_mode == 0) ? 1.05 : (actual_mode == 3) ? 1.2 : 1.35;
-  eff_stem_drive = 1 + (s_drive - 1) * min(stem_energy_smooth_arr[t_stem] * energy_factor, 1);
-  
-  has_master_smooth = has_master_smooth * 0.99 + has_master * 0.01;
-  gr = gmem[20]; (gr <= 0 || gr > 2.0) ? gr = 1.0;
-  global_rail_raw = gr * has_master_smooth + (1.0 - has_master_smooth);
-  local_railL = local_railL * local_inertiaL + global_rail_raw * (1.0 - local_inertiaL);
-  local_railR = local_railR * local_inertiaR + global_rail_raw * (1.0 - local_inertiaR);
-  
-  t_os > 0 ? (
-    // Feed Upsampler
-    upL.advanceSinc(spl0);
-    upR.advanceSinc(spl1);
+  t_bypass == 0 ? (
+    // --- ACTIVE PROCESSING ---
+    local_drift = (drift_seed[t_stem] * drift_mod);
+    cur_energy = max(abs(spl0), abs(spl1));
+    stem_energy_smooth_arr[t_stem] = stem_energy_smooth_arr[t_stem] * energy_smooth_coeff + cur_energy * (1.0 - energy_smooth_coeff);
     
-    loop(os_N,
-      // Get Subsample (Interpolated High Rate)
-      sL = upL.getSubSample();
-      sR = upR.getSubSample();
-      
-      // --- CORE PROCESSING START ---
-      sL *= eff_stem_drive; sR *= eff_stem_drive;
+    energy_factor = (actual_mode == 0) ? 1.05 : (actual_mode == 3) ? 1.2 : 1.35;
+    eff_stem_drive = 1 + (s_drive - 1) * min(stem_energy_smooth_arr[t_stem] * energy_factor, 1);
+    
+    has_master_smooth = has_master_smooth * 0.99 + has_master * 0.01;
+    gr = gmem[20]; (gr <= 0 || gr > 2.0) ? gr = 1.0;
+    global_rail_raw = gr * has_master_smooth + (1.0 - has_master_smooth);
+    local_railL = local_railL * local_inertiaL + global_rail_raw * (1.0 - local_inertiaL);
+    local_railR = local_railR * local_inertiaR + global_rail_raw * (1.0 - local_inertiaR);
+    
+    t_os > 0 ? (
+      upL.advanceSinc(spl0); upR.advanceSinc(spl1);
+      loop(os_N,
+        sL = upL.getSubSample(); sR = upR.getSubSample();
+        
+        sL *= eff_stem_drive; sR *= eff_stem_drive;
+        clp = (0.68 * headroom_offset) + local_drift;
+        abs(sL) > clp ? sL = (clp + (1-clp)*sin((abs(sL)-clp)/(1.5-clp)*half_pi))*sign(sL);
+        abs(sR) > clp ? sR = (clp + (1-clp)*sin((abs(sR)-clp)/(1.5-clp)*half_pi))*sign(sR);
+        
+        slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
+        slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
+        sL = lastL + (sL - lastL) * max(min((slew_mod * local_railL) + jitterL, 0.99), 0.01); 
+        sR = lastR + (sR - lastR) * max(min((slew_mod * local_railR) + jitterR, 0.99), 0.01);
+        lastL = sL; lastR = sR;
+
+        actual_mode == 1 ? ( sL += sL*sL * (0.05 + local_drift); sR += sR*sR * (0.05 + local_drift); );
+        actual_mode == 2 ? ( sL += sL*sL*sL * 0.35; sR += sR*sR*sR * 0.35; );
+        sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
+        ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
+        oAL = ap_cL * sL + apL_state; apL_state = sL - ap_cL * oAL; sL = oAL;
+        oAR = ap_cR * sR + apR_state; apR_state = sR - ap_cR * oAR; sR = oAR;
+        sL = sin(max(min(sL * (local_railL + jitterL), 1.45), -1.45)); 
+        sR = sin(max(min(sR * (local_railR + jitterR), 1.45), -1.45));
+        sL = sL / eff_stem_drive; sR = sR / eff_stem_drive;
+
+        downL.advanceHist(sL); downR.advanceHist(sR);
+      );
+      spl0 = downL.sincDownSample(); spl1 = downR.sincDownSample();
+    ) : (
+      sL = spl0 * eff_stem_drive; sR = spl1 * eff_stem_drive;
       clp = (0.68 * headroom_offset) + local_drift;
       abs(sL) > clp ? sL = (clp + (1-clp)*sin((abs(sL)-clp)/(1.5-clp)*half_pi))*sign(sL);
       abs(sR) > clp ? sR = (clp + (1-clp)*sin((abs(sR)-clp)/(1.5-clp)*half_pi))*sign(sR);
       
-      slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : 0.45;
+      slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
       slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
+      
+      // SLEW COMPENSATION FOR NO OVERSAMPLING
+      slew_mod *= 2.2; 
+      
       sL = lastL + (sL - lastL) * max(min((slew_mod * local_railL) + jitterL, 0.99), 0.01); 
       sR = lastR + (sR - lastR) * max(min((slew_mod * local_railR) + jitterR, 0.99), 0.01);
       lastL = sL; lastR = sR;
@@ -397,39 +428,16 @@ t_topo == 0 ? (
       oAR = ap_cR * sR + apR_state; apR_state = sR - ap_cR * oAR; sR = oAR;
       sL = sin(max(min(sL * (local_railL + jitterL), 1.45), -1.45)); 
       sR = sin(max(min(sR * (local_railR + jitterR), 1.45), -1.45));
-      sL = sL / eff_stem_drive; 
-      sR = sR / eff_stem_drive;
-      // --- CORE PROCESSING END ---
-
-      // Feed Downsampler
-      downL.advanceHist(sL);
-      downR.advanceHist(sR);
+      spl0 = sL / eff_stem_drive; spl1 = sR / eff_stem_drive;
     );
-    // Get Downsampled Output
-    spl0 = downL.sincDownSample();
-    spl1 = downR.sincDownSample();
   ) : (
-    // NO OVERSAMPLING (Legacy Path for CPU saving)
-    sL = spl0 * eff_stem_drive; sR = spl1 * eff_stem_drive;
-    clp = (0.68 * headroom_offset) + local_drift;
-    abs(sL) > clp ? sL = (clp + (1-clp)*sin((abs(sL)-clp)/(1.5-clp)*half_pi))*sign(sL);
-    abs(sR) > clp ? sR = (clp + (1-clp)*sin((abs(sR)-clp)/(1.5-clp)*half_pi))*sign(sR);
+    // --- STEM SENDER BYPASS (STATE SCRUBBER) ---
+    lastL *= 0.5; lastR *= 0.5;
+    apL_state *= 0.5; apR_state *= 0.5;
+    (abs(lastL) < denorm) ? lastL = 0; 
+    (abs(lastR) < denorm) ? lastR = 0;
     
-    slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : 0.45;
-    slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
-    sL = lastL + (sL - lastL) * max(min((slew_mod * local_railL) + jitterL, 0.99), 0.01); 
-    sR = lastR + (sR - lastR) * max(min((slew_mod * local_railR) + jitterR, 0.99), 0.01);
-    lastL = sL; lastR = sR;
-
-    actual_mode == 1 ? ( sL += sL*sL * (0.05 + local_drift); sR += sR*sR * (0.05 + local_drift); );
-    actual_mode == 2 ? ( sL += sL*sL*sL * 0.35; sR += sR*sR*sR * 0.35; );
-    sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
-    ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
-    oAL = ap_cL * sL + apL_state; apL_state = sL - ap_cL * oAL; sL = oAL;
-    oAR = ap_cR * sR + apR_state; apR_state = sR - ap_cR * oAR; sR = oAR;
-    sL = sin(max(min(sL * (local_railL + jitterL), 1.45), -1.45)); 
-    sR = sin(max(min(sR * (local_railR + jitterR), 1.45), -1.45));
-    spl0 = sL / eff_stem_drive; spl1 = sR / eff_stem_drive;
+    spl0 = spl0; spl1 = spl1;
   );
 
 // --------------------------------------------------------------------------------
@@ -467,17 +475,16 @@ t_topo == 0 ? (
     rail_smooth = rail_smooth * rail_inertia_coeff + target_sag * (1.0 - rail_inertia_coeff);
     gmem[20] = rail_smooth; 
     
-    // RELAXED HEADROOM COMPENSATION (Power 0.25)
-    // Allows volume to build up more "analog style" while preventing input clip
-    headroom_compensate = active_stems > 1 ? 1 / pow(active_stems, 0.25) : 1.0;
-    
-    // APPLY COMPENSATION (INPUT)
-    sumL *= headroom_compensate;
-    sumR *= headroom_compensate;
+    // CPU OPTIMIZATION: CACHE HEADROOM CALCULATION
+    // active_stems only changes on fade in/out, no need to calc pow() every sample
+    (active_stems != last_active_stems) ? (
+      cached_headroom = active_stems > 1 ? 1 / pow(active_stems, 0.25) : 1.0;
+      last_active_stems = active_stems;
+    );
+    sumL *= cached_headroom;
+    sumR *= cached_headroom;
 
     delta_refL = sumL; delta_refR = sumR;
-    
-    // Capture Sum for Processing
     base_sumL = sumL; base_sumR = sumR;
 
     t_os > 0 ? (
@@ -488,44 +495,51 @@ t_topo == 0 ? (
         proc_sumL = upL.getSubSample();
         proc_sumR = upR.getSubSample();
 
-        // --- MASTER CORE PROCESSING START ---
         proc_sumL *= s_drive; proc_sumR *= s_drive;
         proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
         proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
         
-        // --- COILS2 "HIGH-END" PORT START (No Filters) ---
+        // --- MASTER FLAVOR INJECTION ---
+        slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
+        slew_mod = slew_base * (1 + (1.0 - rail_smooth) * 4.5) * (headroom_offset * 0.5 + 0.5);
         
-        // 1. Calculate Distortion Scaling
+        proc_sumL = last_sumL + (proc_sumL - last_sumL) * max(min((slew_mod * rail_smooth), 0.99), 0.01); 
+        proc_sumR = last_sumR + (proc_sumR - last_sumR) * max(min((slew_mod * rail_smooth), 0.99), 0.01);
+        last_sumL = proc_sumL; last_sumR = proc_sumR;
+
+        // CALIBRATED HARMONICS
+        actual_mode == 0 ? ( 
+          proc_sumL += (proc_sumL*proc_sumL * 0.04) + (proc_sumL*proc_sumL*proc_sumL * 0.15); 
+          proc_sumR += (proc_sumR*proc_sumR * 0.04) + (proc_sumR*proc_sumR*proc_sumR * 0.15); 
+        );
+        actual_mode == 1 ? ( proc_sumL += proc_sumL*proc_sumL * 0.08; proc_sumR += proc_sumR*proc_sumR * 0.08; );
+        actual_mode == 2 ? ( proc_sumL += proc_sumL*proc_sumL*proc_sumL * 0.45; proc_sumR += proc_sumR*proc_sumR*proc_sumR * 0.45; );
+        // ------------------------------------------
+
         c2_sat = s_iron_gain * 0.95; 
         c2_scale = (1.0 - c2_sat); c2_scale *= c2_scale; 
         c2_scale = max(c2_scale, 0.001); 
-        
-        // 2. Drive the core (Difference generation)
-        c2_dL = proc_sumL / c2_scale;
-        c2_dR = proc_sumR / c2_scale;
-        
-        // 3. Magnetic Hysteresis (IIR Filter)
-        c2_iir = c2_iir_val; // SCALED IIR
+        c2_dL = proc_sumL / c2_scale; c2_dR = proc_sumR / c2_scale;
+        c2_iir = c2_iir_val; 
         
         h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
         h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
+        
+        (abs(h_hystL) < denorm) ? h_hystL = 0;
+        (abs(h_hystR) < denorm) ? h_hystR = 0;
         
         c2_dL = max(min(c2_dL, 1.57), -1.57);
         c2_dR = max(min(c2_dR, 1.57), -1.57);
         h_hystL = max(min(h_hystL, 1.57), -1.57);
         h_hystR = max(min(h_hystR, 1.57), -1.57);
         
-        // 4. Apply Magnetic Non-Linearity
         proc_sumL += (sin(c2_dL) - sin(h_hystL)) * c2_scale;
         proc_sumR += (sin(c2_dR) - sin(h_hystR)) * c2_scale;
         
-        // --- COILS2 "HIGH-END" PORT END ---
-
         r_off = (1.0 - rail_smooth) * 0.12;
         xL = max(min(proc_sumL * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2L = exp(2*xL); proc_sumL = (e2L-1)/(e2L+1);
         xR = max(min(proc_sumR * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2R = exp(2*xR); proc_sumR = (e2R-1)/(e2R+1);
         proc_sumL *= s_recovery; proc_sumR *= s_recovery;
-        // --- MASTER CORE PROCESSING END ---
 
         downL.advanceHist(proc_sumL);
         downR.advanceHist(proc_sumR);
@@ -533,25 +547,42 @@ t_topo == 0 ? (
       sumL = downL.sincDownSample();
       sumR = downR.sincDownSample();
     ) : (
-      // NO OVERSAMPLING
       proc_sumL = base_sumL; proc_sumR = base_sumR;
       proc_sumL *= s_drive; proc_sumR *= s_drive;
       proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
       proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
       
-      // --- COILS2 "HIGH-END" PORT START (No Filters) ---
-      c2_sat = s_iron_gain * 0.95; 
+      // --- MASTER FLAVOR INJECTION (FIX v1.5 + v1.7 + v1.8) ---
+      slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
       
+      slew_mod = slew_base * (1 + (1.0 - rail_smooth) * 4.5) * (headroom_offset * 0.5 + 0.5);
+      
+      // SLEW COMPENSATION FOR NO OVERSAMPLING
+      slew_mod *= 2.2;
+
+      proc_sumL = last_sumL + (proc_sumL - last_sumL) * max(min((slew_mod * rail_smooth), 0.99), 0.01); 
+      proc_sumR = last_sumR + (proc_sumR - last_sumR) * max(min((slew_mod * rail_smooth), 0.99), 0.01);
+      last_sumL = proc_sumL; last_sumR = proc_sumR;
+
+      actual_mode == 0 ? ( 
+        proc_sumL += (proc_sumL*proc_sumL * 0.04) + (proc_sumL*proc_sumL*proc_sumL * 0.15); 
+        proc_sumR += (proc_sumR*proc_sumR * 0.04) + (proc_sumR*proc_sumR*proc_sumR * 0.15); 
+      );
+      actual_mode == 1 ? ( proc_sumL += proc_sumL*proc_sumL * 0.08; proc_sumR += proc_sumR*proc_sumR * 0.08; );
+      actual_mode == 2 ? ( proc_sumL += proc_sumL*proc_sumL*proc_sumL * 0.45; proc_sumR += proc_sumR*proc_sumR*proc_sumR * 0.45; );
+      // ------------------------------------------
+      
+      c2_sat = s_iron_gain * 0.95; 
       c2_scale = (1.0 - c2_sat); c2_scale *= c2_scale; 
       c2_scale = max(c2_scale, 0.001); 
-      
-      c2_dL = proc_sumL / c2_scale;
-      c2_dR = proc_sumR / c2_scale;
-      
-      c2_iir = c2_iir_val; // SCALED IIR
+      c2_dL = proc_sumL / c2_scale; c2_dR = proc_sumR / c2_scale;
+      c2_iir = c2_iir_val; 
       
       h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
       h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
+      
+      (abs(h_hystL) < denorm) ? h_hystL = 0;
+      (abs(h_hystR) < denorm) ? h_hystR = 0;
       
       c2_dL = max(min(c2_dL, 1.57), -1.57);
       c2_dR = max(min(c2_dR, 1.57), -1.57);
@@ -560,7 +591,6 @@ t_topo == 0 ? (
       
       proc_sumL += (sin(c2_dL) - sin(h_hystL)) * c2_scale;
       proc_sumR += (sin(c2_dR) - sin(h_hystR)) * c2_scale;
-      // --- COILS2 "HIGH-END" PORT END ---
 
       r_off = (1.0 - rail_smooth) * 0.12;
       xL = max(min(proc_sumL * (1.1 + r_off) / (headroom_offset * 0.5 + 0.5), 12), -12); e2L = exp(2*xL); proc_sumL = (e2L-1)/(e2L+1);
@@ -569,10 +599,8 @@ t_topo == 0 ? (
       sumL = proc_sumL; sumR = proc_sumR;
     );
     
-    // AUTOMATIC MAKEUP GAIN (RESTORE OUTPUT LEVEL)
-    // We boost the output by the same factor we attenuated the input
-    // This provides "drive" on input but steady volume on output
-    makeup_gain = 1.0 / headroom_compensate;
+    // Automatic Makeup Gain
+    makeup_gain = 1.0 / cached_headroom;
     sumL *= makeup_gain;
     sumR *= makeup_gain;
     
@@ -600,7 +628,15 @@ t_topo == 0 ? (
       spl1 = sumR * s_out_gain; 
     );
   ) : (
+    // MASTER SUMMER BYPASS
     spl0 = dryL; spl1 = dryR; gmem[20] = 1.0;
+    // Scrubber for Master
+    h_hystL *= 0.5; h_hystR *= 0.5;
+    last_sumL *= 0.5; last_sumR *= 0.5; 
+    (abs(h_hystL) < denorm) ? h_hystL = 0;
+    (abs(h_hystR) < denorm) ? h_hystR = 0;
+    (abs(last_sumL) < denorm) ? last_sumL = 0;
+    (abs(last_sumR) < denorm) ? last_sumR = 0;
   );
   k = 2; loop(16, spl(k) = 0; k += 1; );
 );
