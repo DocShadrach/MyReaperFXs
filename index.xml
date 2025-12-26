@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="6d9de8a75b635bad88e3b267bb18750d71b9df2a">
+<index version="1" name="DocShadrach FXs" commit="444a38e5af8d3dcbc67e329144e69dc2d7a7c09c">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -195,6 +195,10 @@ A plugin to bring guitar cabinet IRs to life and add realism.
     <version name="1.0.0" author="Doc Shadrach" time="2025-12-20T11:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
     <source file="Speaker_Soul_Engine.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/7aa047d89d9d084cfbe65d1ce1aa1e8beba16651/Speaker_Soul_Engine.jsfx</source>
+    </version>
+    <version name="1.1.0" author="Doc Shadrach" time="2025-12-25T07:00:00Z">
+     <changelog><![CDATA[Added Detector Weighting and "Dirty Thump" saturation for realistic air movement simulation.]]></changelog>
+    <source file="Speaker_Soul_Engine.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/444a38e5af8d3dcbc67e329144e69dc2d7a7c09c/Speaker_Soul_Engine.jsfx</source>
     </version>
     </reapack>
 
