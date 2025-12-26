@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="32fd80ddc51835ced66ffc266a913098fd308541">
+<index version="1" name="DocShadrach FXs" commit="91ffc9fc009770f79568ee3178deb5e87ad7863b">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -259,6 +259,10 @@ A 16-ch Analog-Like Stem Summer.
     <version name="1.2.0" author="Doc Shadrach" time="2025-12-25T07:00:00Z">
      <changelog><![CDATA[Calibrated transformer IIR for sample rate independence.]]></changelog>
     <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/dc991186b1e5dc7ff7417ff9a7eadcf53ee05c17/The_Hot_Summer.jsfx</source>
+    </version>
+    <version name="1.3.0" author="Doc Shadrach" time="2025-12-26T07:00:00Z">
+     <changelog><![CDATA[Re-engineered the architecture with atomic thread safety, true hard-bypass, and state scrubbing for bulletproof stability.]]></changelog>
+    <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/91ffc9fc009770f79568ee3178deb5e87ad7863b/The_Hot_Summer.jsfx</source>
     </version>
     </reapack>
  </category>
