@@ -1,7 +1,11 @@
 desc: Speaker Soul Engine (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0
+// version: 1.1 (Physics Improved)
 // about: High-end mechanical speaker modeling.
+//
+// Updates v1.1: 
+// - Added Detector Weighting (Low frequencies drive the stress, highs do not).
+// - Added "Dirty Thump" saturation for realistic air movement simulation.
 
 // SLIDERS
 slider1:t_stress=30<0,100,0.5>Speaker Stress (%)
@@ -35,6 +39,9 @@ stateL = 0; stateR = 0;
 hL1 = 0; hL2 = 0; hR1 = 0; hR2 = 0;
 preL = 0; preR = 0;
 
+// NEW: Detector Filter State
+detL = 0; detR = 0;
+
 // Smoothed values initialization
 s_calib = 1; s_stress = 0; s_tgain = 0; s_brk = 0; s_out = 1; s_hp = 70;
 
@@ -53,6 +60,10 @@ character = t_char;
 th_lp = exp(-2 * $pi * 130 * inv_srate);
 // Anti-aliasing pre-filter (smooth cut at 19kHz)
 aa_lp = exp(-2 * $pi * 19000 * inv_srate);
+
+// NEW: Detector Weighting Filter (800Hz Low Pass)
+// Only frequencies below this will push the cone hard.
+det_lp = exp(-2 * $pi * 800 * inv_srate);
 
 @sample
 // 1. PARAMETER SMOOTHING (Anti-click engine)
@@ -85,20 +96,24 @@ preL = preL * aa_lp + sL * (1 - aa_lp);
 preR = preR * aa_lp + sR * (1 - aa_lp);
 dryL = sL; dryR = sR;
 
-// 4. MECHANICAL ENVELOPE (Mechanical inertia modeling)
-// Optimized scaling for -18dBFS nominal studio levels
-aL = abs(preL) * 4.5; aR = abs(preR) * 4.5;
+// 4. MECHANICAL ENVELOPE (Physics Improved)
+// We filter the detection signal so high frequencies don't trigger false stress.
+detL = detL * det_lp + abs(preL) * (1 - det_lp);
+detR = detR * det_lp + abs(preR) * (1 - det_lp);
+
+// Optimized scaling (using filtered detection signal)
+aL = detL * 4.5; aR = detR * 4.5;
 envL = (aL > envL) ? (aL * atk + envL * (1-atk)) : (envL * rel + aL * (1-rel));
 envR = (aR > envR) ? (aR * atk + envR * (1-atk)) : (envR * rel + aR * (1-rel));
 
 // 5. MECHANICAL STRESS ENGINE
 stL = min(envL * s_stress, 0.98); stR = min(envR * s_stress, 0.98);
 (character == 0) ? (
-  // VINTAGE: Asymmetric Mechanical Sag (Even harmonics warmness)
+  // VINTAGE: Asymmetric Mechanical Sag
   sL = (preL + 0.05 * stL * preL*preL) / (1.0 + abs(preL) * stL * 0.45);
   sR = (preR + 0.05 * stR * preR*preR) / (1.0 + abs(preR) * stR * 0.45);
 ) : (
-  // MODERN: Coil Tension (Cubic saturation / 3rd harmonics)
+  // MODERN: Coil Tension
   sL = preL * (1.0 - stL * 0.22) + ( (preL*preL*preL * 0.35) * stL );
   sR = preR * (1.0 - stR * 0.22) + ( (preR*preR*preR * 0.35) * stR );
 );
@@ -109,9 +124,16 @@ dL = 18000 - (stL * s_brk * 12500); dR = 18000 - (stR * s_brk * 12500);
 cL = exp(-2 * $pi * dL * inv_srate); cR = exp(-2 * $pi * dR * inv_srate);
 stateL = stateL * cL + sL * (1 - cL); stateR = stateR * cR + sR * (1 - cR);
 
-// 7. MECHANICAL THUMP (Air pressure reconstruction)
+// 7. MECHANICAL THUMP (Air pressure reconstruction - Improved)
 lpL = lpL * th_lp + dryL * (1 - th_lp); lpR = lpR * th_lp + dryR * (1 - th_lp);
-tL = lpL * s_tgain * (stL * 1.2); tR = lpR * s_tgain * (stR * 1.2);
+// Raw thump signal
+raw_tL = lpL * s_tgain * (stL * 1.5); 
+raw_tR = lpR * s_tgain * (stR * 1.5);
+
+// Soft saturation on Thump (Air turbulence simulation)
+// Tanh-like approximation: x / (1 + |x|)
+tL = raw_tL / (1.0 + abs(raw_tL) * 0.5);
+tR = raw_tR / (1.0 + abs(raw_tR) * 0.5);
 
 // 8. FINAL RECONSTRUCTION & ANTI-DC PROTECTION
 spl0 = (stateL + tL) * s_out; spl1 = (stateR + tR) * s_out;
@@ -146,7 +168,7 @@ function draw_ui(val, tame, x, y, label) (
 
 // Plugin Title
 gfx_set(1, 1, 1, 0.15); gfx_x = 180; gfx_y = 15; gfx_setfont(1, "Arial", 18, 'b');
-gfx_drawstr("SPEAKER SOUL ENGINE");
+gfx_drawstr("SPEAKER SOUL ENGINE v1.1");
 
 // Render Dual Mono Visuals
 draw_ui(gfx_envL, gfx_tamingL, 90, 55, "LEFT");
