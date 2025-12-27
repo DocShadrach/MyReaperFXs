@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.5
+// version: 1.6
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -34,6 +34,11 @@ iirAmount = 0.00295 / overallscale;
 ist_threshold_base = 0.381966011250105;
 smooth = exp(-inv_srate / 0.045);
 thermal_rel = exp(-inv_srate / 2.5);
+
+// --- OPTIMIZED PHYSICS CONSTANTS ---
+// Calculated once on init. Defines the capacitor charge time (25ms).
+// This ensures identical behavior at any sample rate or buffer size.
+rail_loss = 1.0 - exp(-inv_srate / 0.025);
 
 instance_id = rand(1000000) + 1; 
 last_global_sync = gmem[0];
@@ -172,6 +177,8 @@ topology_flux_depth = t_topo == 0 ? 1.0 : 0.3;
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
 energy_accum = 0;
 t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); );
+
+// Capture the target rail voltage for this block
 rail_target = gmem[10];
 
 @sample
@@ -225,7 +232,13 @@ xt_leak = 0;
   apL_in = sL; sL = (apL_in * (flux_coeff - 1) + apL) / (1 + flux_coeff); apL = apL_in + sL * flux_coeff;
   apR_in = sR; sR = (apR_in * (flux_coeff - 1) + apR) / (1 + flux_coeff); apR = apR_in + sR * flux_coeff;
 
+  // --- OPTIMIZED RAIL PHYSICS (Leaky Integrator) ---
+  // Efficiently smoothes the rail voltage without 'gmem' access per sample.
+  // Acts as a physical capacitor, decoupling physics from buffer size.
+  buffered_rail += (rail_target - buffered_rail) * rail_loss;
+  
   shared_sag = 1.0 / (1.0 + buffered_rail * 0.04);
+  
   slew_t = ist_threshold_base * (2.05 - s_analog) * shared_sag * topology_interstage; 
   inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
 
@@ -312,7 +325,11 @@ function draw_button(x, y, w, h, active, label, r, g, b) (
   gfx_set(1, 1, 1, 0.05); gfx_line(x, y, x+w, y); 
   active == 1 ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
   gfx_set(1, 1, 1, active == 1 ? 1 : 0.4);
-  gfx_setfont(1, "Arial", 13, 'b');
+  
+  // --- MODIFICACIÓN: Tamaño dinámico de fuente ---
+  // Si el botón es alto (>25px), usa letra grande (18). Si es pequeño, letra chica (11).
+  gfx_setfont(1, "Arial", h > 25 ? 18 : 11, 'b');
+  
   gfx_measurestr(label, lw, lh);
   gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
   gfx_drawstr(label);
