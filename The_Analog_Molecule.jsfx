@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.7
+// version: 1.8
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -17,7 +17,8 @@ slider4:t_flux=20<0,100,0.5>3D Flux (Phase Depth) %
 slider5:t_thermal=20<0,100,0.5>Thermal Bloom (Inertia) %
 slider6:t_analog=12<0,100,1>Analog Texture (Interstage) %
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
-slider8:t_bypass=0<0,1,1{Active,Bypassed}>Global State
+slider8:t_out_gain=0<-12,12,0.1>Output Gain (dB)
+slider9:t_bypass=0<0,1,1{Active,Bypassed}>Global State
 slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
 slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Master XT Mode
 slider64:s_init_done=0<0,1,1>-
@@ -37,8 +38,6 @@ smooth = exp(-inv_srate / 0.045);
 thermal_rel = exp(-inv_srate / 2.5);
 
 // --- OPTIMIZED PHYSICS CONSTANTS ---
-// Calculated once on init. Defines the capacitor charge time (25ms).
-// This ensures identical behavior at any sample rate or buffer size.
 rail_loss = 1.0 - exp(-inv_srate / 0.025);
 
 instance_id = rand(1000000) + 1; 
@@ -76,7 +75,6 @@ BANK_B_OFFSET = 300;
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
 
 @slider
-// v1.7: NEW DEFAULTS FOR MODERN WORKFLOW (Faster Transients)
 t_topo != last_topo ? (
   t_topo == 0 ? ( t_flux = 20; t_thermal = 20; t_analog = 12; ) : 
   t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
@@ -103,7 +101,7 @@ t_topo == 1 ? ( topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; );
 t_topo == 2 ? topo_offset = -8.0; 
 
 target_calib = 10^((t_drive + topo_offset) / 20);
-target_out = 10^(-(t_drive + topo_offset) / 20);
+target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
 target_bypass = 1.0 - t_bypass; 
 
 @block
@@ -150,7 +148,7 @@ t_topo == 2 && gmem[30] != instance_id ? (
   t_topo = 1; slider_automate(t_topo);
   topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0;
   target_calib = 10^((t_drive + topo_offset) / 20);
-  target_out = 10^(-(t_drive + topo_offset) / 20);
+  target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
 );
 
 gmem[7] != last_global_bypass ? ( t_bypass = gmem[7]; last_global_bypass = gmem[7]; slider_automate(t_bypass); );
@@ -169,20 +167,16 @@ gmem[22] != last_global_calib ? (
   t_topo == 2 ? topo_offset = -8.0;
   t_topo == 0 ? topo_offset = 0.0;
   target_calib = 10^((t_drive + topo_offset) / 20);
-  target_out = 10^(-(t_drive + topo_offset) / 20);
+  target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
 );
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
-
-// v1.7: Bus Interstage penalty reduced (0.7 -> 0.85) to prevent transient eating
 topology_interstage = t_topo == 0 ? 1.0 : 0.85; 
 topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
 
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
 energy_accum = 0;
 t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); );
-
-// Capture the target rail voltage for this block
 rail_target = gmem[10];
 
 @sample
@@ -199,7 +193,6 @@ dryL = sL; dryR = sR;
 peak = max(abs(sL), abs(sR));
 meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_input * 0.9992 + peak * 0.0008);
 
-// NETWORK CLOCK & DOUBLE BUFFER SWAP (Atomic Safe)
 g_clock += 1;
 t_topo == 2 && (g_clock > 128) ? ( 
   g_clock = 0;
@@ -213,7 +206,6 @@ xt_leak = 0;
 
 (t_bypass == 0) ? (
   
-  // 4.5 DOUBLE BUFFERED CROSSTALK ENGINE
   t_xtalk ? (
     read_bank_offset = gmem[PTR_BANK] * 100;      
     write_bank_offset = (1 - gmem[PTR_BANK]) * 100; 
@@ -236,12 +228,8 @@ xt_leak = 0;
   apL_in = sL; sL = (apL_in * (flux_coeff - 1) + apL) / (1 + flux_coeff); apL = apL_in + sL * flux_coeff;
   apR_in = sR; sR = (apR_in * (flux_coeff - 1) + apR) / (1 + flux_coeff); apR = apR_in + sR * flux_coeff;
 
-  // --- OPTIMIZED RAIL PHYSICS (Leaky Integrator) ---
   buffered_rail += (rail_target - buffered_rail) * rail_loss;
-  
   shared_sag = 1.0 / (1.0 + buffered_rail * 0.04);
-  
-  // v1.7 FORMULA: (2.40 - s_analog) provides higher slew headroom for modern transients.
   slew_t = ist_threshold_base * (2.40 - s_analog) * shared_sag * topology_interstage; 
   inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
 
@@ -285,21 +273,21 @@ xt_leak = 0;
 
 ) : (
   // --- STATE SCRUBBER PATH (Smart Decay & Snap) ---
-  // Apply decay
   xt_lp *= 0.5; xt_hp *= 0.5;
   apL *= 0.5; apR *= 0.5;
   istL_A1 *= 0.5; istL_B1 *= 0.5; istL_A2 *= 0.5; istL_B2 *= 0.5;
   istR_A1 *= 0.5; istR_B1 *= 0.5; istR_A2 *= 0.5; istR_B2 *= 0.5;
   heatL *= 0.5; heatR *= 0.5;
 
-  // MICRO-OPTIMIZATION: Denormal Protection (Snap to Zero)
-  // If values are tiny, kill them to save CPU and ensure silence.
   (abs(xt_lp) < 0.000000001) ? xt_lp = 0;
   (abs(xt_hp) < 0.000000001) ? xt_hp = 0;
   (abs(heatL) < 0.000000001) ? heatL = 0;
   (abs(heatR) < 0.000000001) ? heatR = 0;
   
-  sL = rawL * s_calib; sR = rawR * s_calib;
+  // FIX v1.8: FORCE INTERNAL SILENCE
+  // Instead of passing a "ghost signal" (rawL * s_calib), we output 0.
+  // This ensures procL is silence, and spl0 becomes pure rawL during bypass.
+  sL = 0; sR = 0;
 );
 
 procL = sL * s_out; procR = sR * s_out;
@@ -328,11 +316,7 @@ function draw_button(x, y, w, h, active, label, r, g, b) (
   gfx_set(1, 1, 1, 0.05); gfx_line(x, y, x+w, y); 
   active == 1 ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
   gfx_set(1, 1, 1, active == 1 ? 1 : 0.4);
-  
-  // --- MODIFICACIÓN: Tamaño dinámico de fuente ---
-  // Si el botón es alto (>25px), usa letra grande (18). Si es pequeño, letra chica (11).
   gfx_setfont(1, "Arial", h > 25 ? 18 : 11, 'b');
-  
   gfx_measurestr(label, lw, lh);
   gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
   gfx_drawstr(label);
