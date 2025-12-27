@@ -1,20 +1,21 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.6
+// version: 1.7
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
 // derived from 'Interstage' and 'Console9', released under the MIT License.
 // Global network and thermal bloom architecture by Doc Shadrach.
+// 
 
 options:gmem=AnalogMoleculeNetwork
 
 slider1:t_id=1<1,180,1>Analog Channel ID
 slider2:t_topo=0<0,2,1{Channel (Discrete),Bus (Transformer),Master (Main Leader)}>Topology
 slider3:t_calib_mode=1<0,1,1{Hot (0dB),Normal (-4dB)}>Bus Calibration
-slider4:t_flux=25<0,100,0.5>3D Flux (Phase Depth) %
-slider5:t_thermal=25<0,100,0.5>Thermal Bloom (Inertia) %
-slider6:t_analog=35<0,100,1>Analog Texture (Interstage) %
+slider4:t_flux=20<0,100,0.5>3D Flux (Phase Depth) %
+slider5:t_thermal=20<0,100,0.5>Thermal Bloom (Inertia) %
+slider6:t_analog=12<0,100,1>Analog Texture (Interstage) %
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
 slider8:t_bypass=0<0,1,1{Active,Bypassed}>Global State
 slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
@@ -75,10 +76,11 @@ BANK_B_OFFSET = 300;
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
 
 @slider
+// v1.7: NEW DEFAULTS FOR MODERN WORKFLOW (Faster Transients)
 t_topo != last_topo ? (
-  t_topo == 0 ? ( t_flux = 25; t_thermal = 25; t_analog = 35; ) : 
-  t_topo == 1 ? ( t_flux = 15; t_thermal = 35; t_analog = 25; ) : 
-  t_topo == 2 ? ( t_flux = 10; t_thermal = 25; t_analog = 15; );
+  t_topo == 0 ? ( t_flux = 20; t_thermal = 20; t_analog = 12; ) : 
+  t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
+  t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
   slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
   last_topo = t_topo;
 );
@@ -171,7 +173,9 @@ gmem[22] != last_global_calib ? (
 );
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
-topology_interstage = t_topo == 0 ? 1.0 : 0.7; 
+
+// v1.7: Bus Interstage penalty reduced (0.7 -> 0.85) to prevent transient eating
+topology_interstage = t_topo == 0 ? 1.0 : 0.85; 
 topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
 
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
@@ -233,13 +237,12 @@ xt_leak = 0;
   apR_in = sR; sR = (apR_in * (flux_coeff - 1) + apR) / (1 + flux_coeff); apR = apR_in + sR * flux_coeff;
 
   // --- OPTIMIZED RAIL PHYSICS (Leaky Integrator) ---
-  // Efficiently smoothes the rail voltage without 'gmem' access per sample.
-  // Acts as a physical capacitor, decoupling physics from buffer size.
   buffered_rail += (rail_target - buffered_rail) * rail_loss;
   
   shared_sag = 1.0 / (1.0 + buffered_rail * 0.04);
   
-  slew_t = ist_threshold_base * (2.05 - s_analog) * shared_sag * topology_interstage; 
+  // v1.7 FORMULA: (2.40 - s_analog) provides higher slew headroom for modern transients.
+  slew_t = ist_threshold_base * (2.40 - s_analog) * shared_sag * topology_interstage; 
   inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
 
   (flip == 0) ? (
