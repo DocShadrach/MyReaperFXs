@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="21f0dc8732b5ced12c4e3c20e043cbc3ace245d8">
+<index version="1" name="DocShadrach FXs" commit="fb6a7379aeb3142da979cafba622a60e8dd2331d">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -255,6 +255,10 @@ Professional 180-Channel 3D Console Emulator.
     <version name="2.0.0" author="Doc Shadrach" time="2025-12-28T09:00:00Z">
      <changelog><![CDATA[New GUI with bigger buttons and letters.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/21f0dc8732b5ced12c4e3c20e043cbc3ace245d8/The_Analog_Molecule.jsfx</source>
+    </version>
+    <version name="2.1.0" author="Doc Shadrach" time="2025-12-28T12:00:00Z">
+     <changelog><![CDATA[NEW SOUND ENGINE ADDED!! Now you can choose between two different engines.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/fb6a7379aeb3142da979cafba622a60e8dd2331d/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
 
