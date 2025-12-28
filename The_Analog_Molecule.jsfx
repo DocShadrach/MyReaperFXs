@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.9
+// version: 2.0
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -24,7 +24,6 @@ slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Ma
 // UI CONTROL VARIABLES
 slider12:t_link_on=0<0,1,1{Off,On}>-Link Active
 slider13:t_flavor=0<0,4,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering}>-Console Flavor
-// Slider 14 REMOVED (No Groups)
 slider64:s_init_done=0<0,1,1>-
 
 in_pin:left input
@@ -115,7 +114,7 @@ function load_flavor(flavor_id) (
     t_topo == 0 ? ( t_flux=10; t_thermal=10; t_analog=10; );
     t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=5; t_thermal=10; t_analog=8; t_xt_mode=0; );
-  ) : flavor_id == 4 ? ( // Modern Mastering
+  ) : flavor_id == 4 ? ( // Modern
     t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
@@ -245,7 +244,7 @@ bc_val = gmem[bc_addr];
 
 last_link_state = t_link_on;
 
-// --- LINKING SYSTEM V4.3 ---
+// --- LINKING SYSTEM ---
 (t_link_on > 0) ? (
   l_base = 5000;
   
@@ -309,7 +308,7 @@ last_link_state = t_link_on;
     t_flavor = 0; slider_automate(t_flavor);
   );
   (dn_trim != 0) ? (
-    t_out_gain += (dn_trim / 10.0);
+    t_out_gain += dn_trim; // FIX
     slider_automate(t_out_gain);
     target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
     last_trim_int = to_int(t_out_gain);
@@ -374,9 +373,9 @@ last_link_state = t_link_on;
   );
   
   (t_flavor != last_flavor && t_flavor > 0) ? (
-    scope_ch_active ? gmem[1000 + 4] = t_flavor;
-    scope_bus_active ? gmem[2000 + 4] = t_flavor;
-    scope_mtr_active ? gmem[3000 + 4] = t_flavor;
+    scope_ch_active ? gmem[1000 + link_base_idx + 4] = t_flavor;
+    scope_bus_active ? gmem[2000 + link_base_idx + 4] = t_flavor;
+    scope_mtr_active ? gmem[3000 + link_base_idx + 4] = t_flavor;
     last_flavor = t_flavor;
   );
   (t_flavor != last_flavor) ? last_flavor = t_flavor;
@@ -565,7 +564,7 @@ procL -= hpL; procR -= hpR;
 spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass));
 spl1 = (procR * s_bypass) + (rawR * (1 - s_bypass));
 
-@gfx 550 320
+@gfx 550 420
 gfx_clear = 28 + 28*256 + 30*65536; 
 
 function draw_meter(val, x, y, w, h, label, color_mode) (
@@ -600,86 +599,30 @@ function draw_small_button(x, y, w, h, active, label) (
   gfx_drawstr(label);
 );
 
-gfx_set(1, 1, 1, 0.1); gfx_x = 10; gfx_y = 15; gfx_setfont(1, "Arial", 28, 'b');
+// SPECIAL UI: ORANGE/BLACK SCOPE BUTTONS
+function draw_scope_button(x, y, w, h, active, label) (
+  active ? gfx_set(0.9, 0.5, 0.1, 1) : gfx_set(0.2, 0.2, 0.25, 1); // Orange vs Dark
+  gfx_rect(x, y, w, h);
+  active ? gfx_set(0, 0, 0, 1) : gfx_set(1, 1, 1, 0.8); // Black text vs White
+  gfx_setfont(1, "Arial", 18, 'b'); // CHANGED TO 18
+  gfx_measurestr(label, lw, lh);
+  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
+  gfx_drawstr(label);
+);
+
+// TRIM BUTTON (Bold 14)
+function draw_trim_button(x, y, w, h, active, label) (
+  active ? gfx_set(0.4, 0.8, 0.4, 1) : gfx_set(0.2, 0.2, 0.25, 1);
+  gfx_rect(x, y, w, h);
+  gfx_set(1, 1, 1, 0.8);
+  gfx_setfont(1, "Arial", 14, 'b'); // CHANGED TO 14 BOLD
+  gfx_measurestr(label, lw, lh);
+  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
+  gfx_drawstr(label);
+);
+
+gfx_set(1, 1, 1, 0.1); gfx_x = 10; gfx_y = 15; gfx_setfont(1, "Arial", 32, 'b');
 gfx_drawstr("THE ANALOG MOLECULE");
-
-// --- FLAVOR DISPLAY (UI) ---
-flav_name = (t_flavor == 0) ? "CUSTOM / USER" : (t_flavor == 1) ? "BRITISH CLASS A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : "MODERN MASTERING";
-gfx_set(1, 1, 1, 0.6); gfx_setfont(1, "Arial", 12);
-gfx_measurestr(flav_name, fw, fh);
-gfx_x = 415 - fw; gfx_y = 10; 
-gfx_drawstr(flav_name);
-
-draw_small_button(420, 10, 20, 15, 0, "V");
-(mouse_cap & 1 && !last_cap && mouse_x >= 420 && mouse_x <= 440 && mouse_y >= 10 && mouse_y <= 25) ? (
-  gfx_x = mouse_x; gfx_y = mouse_y;
-  sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern Mastering");
-  sel > 0 ? ( t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
-);
-
-// --- LINK & TRIM UI ---
-// LINK ALL TOGGLE
-draw_small_button(450, 15, 80, 20, t_link_on, "LINK: ALL");
-(mouse_cap & 1 && !last_cap && mouse_x >= 450 && mouse_x <= 530 && mouse_y >= 15 && mouse_y <= 35) ? (
-  t_link_on = 1 - t_link_on; slider_automate(t_link_on);
-);
-
-// Link Scope & Trim (Only when Linked)
-t_link_on ? (
-  l_base = 5000;
-  
-  // FIX v3.8: SELF-PUBLISH ACTIVE STATE
-  t_topo == 0 ? gmem[l_base+0] = 1;
-  t_topo == 1 ? gmem[l_base+1] = 1;
-  t_topo == 2 ? gmem[l_base+2] = 1;
-  
-  st_ch = gmem[l_base+0]; st_bus = gmem[l_base+1]; st_mtr = gmem[l_base+2];
-
-  draw_small_button(450, 40, 25, 15, st_ch, "Ch");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 450 && mouse_x <= 475 && mouse_y >= 40 && mouse_y <= 55) ? ( 
-    gmem[l_base+0] = 1 - gmem[l_base+0]; 
-    // Force Wake Up: Channels
-    gmem[70] = (gmem[l_base+0] == 1);
-  );
-  
-  draw_small_button(477, 40, 26, 15, st_bus, "Bus");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 477 && mouse_x <= 503 && mouse_y >= 40 && mouse_y <= 55) ? ( 
-    gmem[l_base+1] = 1 - gmem[l_base+1]; 
-    // Force Wake Up: Buses
-    gmem[71] = (gmem[l_base+1] == 1);
-  );
-  
-  draw_small_button(505, 40, 25, 15, st_mtr, "Mtr");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 505 && mouse_x <= 530 && mouse_y >= 40 && mouse_y <= 55) ? ( 
-    gmem[l_base+2] = 1 - gmem[l_base+2]; 
-    // Force Wake Up: Master
-    gmem[72] = (gmem[l_base+2] == 1);
-  );
-
-  draw_small_button(450, 58, 38, 15, 0, "<");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 450 && mouse_x <= 488 && mouse_y >= 58 && mouse_y <= 73) ? (
-    // FIX v4.3: Micro Trim 0.025
-    st_ch ? atomic_add(gmem[1000 + 3], -0.025);
-    st_bus ? atomic_add(gmem[2000 + 3], -0.025);
-    st_mtr ? atomic_add(gmem[3000 + 3], -0.025);
-  );
-  
-  draw_small_button(492, 58, 38, 15, 0, ">");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 492 && mouse_x <= 530 && mouse_y >= 58 && mouse_y <= 73) ? (
-    st_ch ? atomic_add(gmem[1000 + 3], 0.025);
-    st_bus ? atomic_add(gmem[2000 + 3], 0.025);
-    st_mtr ? atomic_add(gmem[3000 + 3], 0.025);
-  );
-);
-
-// DUPLICATE ID WARNING UI (Bottom Right)
-id_conflict == 1 ? (
-  gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b');
-  warn_text = "ID DUPLICATE!";
-  gfx_measurestr(warn_text, dw, dh);
-  gfx_x = 500 - dw; gfx_y = 305; 
-  gfx_drawstr(warn_text);
-);
 
 draw_meter(min(meter_input * 6.5, 1), 50, 75, 450, 12, "CIRCUIT DRIVE STRENGTH", 0);
 
@@ -736,6 +679,14 @@ has_master == 0 ? (
   gfx_drawstr(warn_s);
 );
 
+id_conflict == 1 ? (
+  gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b');
+  warn_text = "ID DUPLICATE!";
+  gfx_measurestr(warn_text, dw, dh);
+  gfx_x = 500 - dw; gfx_y = 305; 
+  gfx_drawstr(warn_text);
+);
+
 gfx_set(1, 1, 1, 0.05); gfx_rect(50, 295, 450, 1);
 gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
 topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
@@ -744,5 +695,93 @@ status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal
 gfx_measurestr(status_str, sw, sh);
 gfx_x = 50 + (450 - sw)/2; gfx_y = 305;
 gfx_drawstr(status_str);
+
+// --- WARNING UI: WINDOW TOO SMALL ---
+(gfx_h < 415) ? (
+  gfx_set(1, 0.3, 0.3, 1);
+  gfx_setfont(1, "Arial", 11, 'b');
+  txt = "UI HIDDEN: EXPAND WINDOW ▼";
+  gfx_measurestr(txt, w, h);
+  gfx_x = gfx_w - w - 10;
+  gfx_y = 15;
+  gfx_drawstr(txt);
+);
+
+// --- BOTTOM TOOLBAR (NEW UI) ---
+bar_y = 340;
+gfx_set(0.1, 0.1, 0.12, 1); gfx_rect(0, bar_y, 550, 80); // Dark BG
+gfx_set(1, 1, 1, 0.1); gfx_line(0, bar_y, 550, bar_y);
+
+// 1. LINK CONTROL (LEFT)
+draw_button(30, bar_y + 15, 100, 50, t_link_on, t_link_on ? "LINK: ON" : "LINK: OFF", 0, 0.6, 0.2);
+(mouse_cap & 1 && !last_cap && mouse_x >= 30 && mouse_x <= 130 && mouse_y >= bar_y + 15 && mouse_y <= bar_y + 65) ? (
+  t_link_on = 1 - t_link_on; slider_automate(t_link_on);
+);
+
+// 2. SCOPE & TRIM (CENTER)
+// Only visible if Link is ON
+t_link_on ? (
+  l_base = 5000;
+  // Read Self-Published states
+  st_ch = gmem[l_base+0]; st_bus = gmem[l_base+1]; st_mtr = gmem[l_base+2];
+  
+  // Scopes Row
+  draw_scope_button(160, bar_y + 15, 40, 20, st_ch, "CH");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 200 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( 
+    gmem[l_base+0] = 1 - gmem[l_base+0]; gmem[70] = (gmem[l_base+0] == 1); 
+  );
+  
+  draw_scope_button(210, bar_y + 15, 40, 20, st_bus, "BUS");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 210 && mouse_x <= 250 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( 
+    gmem[l_base+1] = 1 - gmem[l_base+1]; gmem[71] = (gmem[l_base+1] == 1);
+  );
+  
+  draw_scope_button(260, bar_y + 15, 40, 20, st_mtr, "MTR");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 260 && mouse_x <= 300 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( 
+    gmem[l_base+2] = 1 - gmem[l_base+2]; gmem[72] = (gmem[l_base+2] == 1);
+  );
+  
+  // Trim Row
+  draw_trim_button(160, bar_y + 45, 65, 20, 0, "< TRIM");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 225 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? (
+    st_ch ? atomic_add(gmem[1000 + 3], -0.025);
+    st_bus ? atomic_add(gmem[2000 + 3], -0.025);
+    st_mtr ? atomic_add(gmem[3000 + 3], -0.025);
+  );
+  
+  draw_trim_button(235, bar_y + 45, 65, 20, 0, "TRIM >");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 235 && mouse_x <= 300 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? (
+    st_ch ? atomic_add(gmem[1000 + 3], 0.025);
+    st_bus ? atomic_add(gmem[2000 + 3], 0.025);
+    st_mtr ? atomic_add(gmem[3000 + 3], 0.025);
+  );
+);
+
+// 3. FLAVOR / PRESET (RIGHT)
+flav_name = (t_flavor == 0) ? "CUSTOM" : (t_flavor == 1) ? "BRITISH A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : "MODERN";
+
+// Logic for Border Color
+r_b = 0; g_b = 0; b_b = 0;
+t_flavor == 1 ? (r_b=0.8; g_b=0.2; b_b=0.2); // British (Red)
+t_flavor == 2 ? (r_b=0.9; g_b=0.9; b_b=0.2); // SSL (Yellow)
+t_flavor == 3 ? (r_b=0.2; g_b=0.6; b_b=1.0); // API (Blue)
+t_flavor == 4 ? (r_b=0.8; g_b=0.4; b_b=0.8); // Modern (Purple)
+
+draw_button(330, bar_y + 15, 190, 50, 0, flav_name, 0, 0, 0);
+
+// Draw Colored Bottom Border
+t_flavor > 0 ? (
+  gfx_set(r_b, g_b, b_b, 1);
+  gfx_rect(330, bar_y + 62, 190, 3); 
+);
+
+// Draw small arrow icon
+gfx_set(1, 1, 1, 0.5); gfx_triangle(490, bar_y+35, 500, bar_y+35, 495, bar_y+45);
+
+(mouse_cap & 1 && !last_cap && mouse_x >= 330 && mouse_x <= 520 && mouse_y >= bar_y+15 && mouse_y <= bar_y+65) ? (
+  gfx_x = mouse_x; gfx_y = mouse_y;
+  sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern");
+  sel > 0 ? ( t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
+);
 
 last_cap = mouse_cap;
