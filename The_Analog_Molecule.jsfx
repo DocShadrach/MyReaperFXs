@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.0
+// version: 2.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -8,7 +8,12 @@ desc: The Analog Molecule (DocShadrach)
 // Global network and thermal bloom architecture by Doc Shadrach.
 // 
 
-options:gmem=AnalogMoleculeNetwork
+// NEW in v2.1!!
+// ENGINE A: Original v2.0 (Dynamic/Clean/Airwindows based)
+// ENGINE B: Iron Mod (Bias/Core/Tanh Saturation)
+// Global Engine Sync implemented.
+
+options:gmem=AnalogMoleculeHybrid
 
 slider1:t_id=1<1,180,1>Analog Channel ID
 slider2:t_topo=0<0,2,1{Channel (Discrete),Bus (Transformer),Master (Main Leader)}>Topology
@@ -24,6 +29,9 @@ slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Ma
 // UI CONTROL VARIABLES
 slider12:t_link_on=0<0,1,1{Off,On}>-Link Active
 slider13:t_flavor=0<0,4,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering}>-Console Flavor
+// HYBRID ENGINE SWITCH
+slider14:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod}>-Engine Mode
+
 slider64:s_init_done=0<0,1,1>-
 
 in_pin:left input
@@ -31,7 +39,13 @@ in_pin:right input
 out_pin:left output
 out_pin:right output
 
+// --- MATH HELPER FOR MOD ENGINE ---
 @init
+function tanh(x) local(e2x) (
+  e2x = exp(2 * x);
+  (e2x - 1) / (e2x + 1);
+);
+
 inv_srate = 1/srate;
 overallscale = srate / 44100.0;
 firstStage = 0.381966011250105 / overallscale;
@@ -48,7 +62,9 @@ last_global_sync = gmem[0];
 last_global_bypass = gmem[7];
 last_global_xtalk = gmem[21];
 last_global_calib = gmem[22];
-last_global_xt_mode = gmem[23]; 
+last_global_xt_mode = gmem[23];
+// NEW: Global Engine Sync Tracker
+last_global_engine = gmem[24]; 
 
 // Link System Trackers
 net_flux_mirror = 0;
@@ -97,28 +113,40 @@ BANK_B_OFFSET = 300;
 // SAFETY INITIALIZATION
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
 
+// --- MOD VARIABLES ---
+topo_bias = 0; topo_core = 0; topo_drive_push = 0;
+
 function to_int(val) ( floor(val * 10 + 0.5); );
 
-// --- PRESET LOADING FUNCTION ---
+// --- PRESET LOADING FUNCTION (HYBRID) ---
+// Now sets BOTH the sliders AND the hidden circuit vars
 function load_flavor(flavor_id) (
   loading_preset = 1; 
+  
   flavor_id == 1 ? ( // British Class A
+    topo_bias = 0.15; topo_core = 0.3; topo_drive_push = 1.1; // MOD VARS
     t_topo == 0 ? ( t_flux=35; t_thermal=40; t_analog=25; );
     t_topo == 1 ? ( t_flux=25; t_thermal=50; t_analog=30; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=15; t_thermal=30; t_analog=20; t_xt_mode=0; );
   ) : flavor_id == 2 ? ( // Solid State E
+    topo_bias = 0.0; topo_core = 0.05; topo_drive_push = 1.25; // MOD VARS
     t_topo == 0 ? ( t_flux=20; t_thermal=20; t_analog=15; );
     t_topo == 1 ? ( t_flux=15; t_thermal=35; t_analog=20; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=10; t_thermal=20; t_analog=12; t_xt_mode=1; );
   ) : flavor_id == 3 ? ( // US Discrete
+    topo_bias = 0.05; topo_core = 0.15; topo_drive_push = 1.15; // MOD VARS
     t_topo == 0 ? ( t_flux=10; t_thermal=10; t_analog=10; );
     t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=5; t_thermal=10; t_analog=8; t_xt_mode=0; );
   ) : flavor_id == 4 ? ( // Modern
+    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; // MOD VARS
     t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
+  ) : ( // Custom
+    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
   );
+
   slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog); 
   slider_automate(t_calib_mode); slider_automate(t_xt_mode);
   
@@ -134,14 +162,19 @@ function load_flavor(flavor_id) (
 // HIDE CONTROL SLIDERS
 slider_show(t_link_on, 0);
 slider_show(t_flavor, 0);
+slider_show(t_engine_mode, 0); 
 
 cur_flux_int = to_int(t_flux);
 cur_thermal_int = to_int(t_thermal);
 cur_analog_int = to_int(t_analog);
 
+// PUSH LOCAL ENGINE CHANGE TO GLOBAL
+gmem[24] = t_engine_mode;
+
 // DIRTY STATE CHECK
 (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
   t_flavor = 0; slider_automate(t_flavor);
+  topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; // Reset Mod vars
 );
 
 // DETECT LINK TOGGLE
@@ -158,6 +191,7 @@ t_topo != last_topo ? (
     t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
     t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
     slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
+    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
   );
   last_topo = t_topo;
   last_flux_int = to_int(t_flux); 
@@ -424,6 +458,12 @@ gmem[23] != last_global_xt_mode ? (
   t_topo != 2 ? ( t_xt_mode = gmem[23]; slider_automate(t_xt_mode); );
   last_global_xt_mode = gmem[23];
 );
+// SYNC ENGINE GLOBAL IN
+gmem[24] != last_global_engine ? ( 
+  t_engine_mode = gmem[24]; 
+  last_global_engine = t_engine_mode; 
+  slider_automate(t_engine_mode); 
+);
 
 target_xt_db = (t_xt_mode == 0) ? -75.0 : (t_xt_mode == 1) ? -95.0 : -115.0;
 xt_gain = 10^(target_xt_db/20);
@@ -489,6 +529,24 @@ xt_leak = 0;
     sL += xt_leak * s_bypass; 
     sR += xt_leak * s_bypass;
   );
+  
+  // --- HYBRID SWITCH POINT ---
+  (t_engine_mode == 1 && t_flavor > 0) ? (
+      // === ENGINE B: IRON MOD ===
+      (topo_core > 0) ? (
+         drive_core = 1.0 + (s_thermal * 0.05); 
+         sL = sL * drive_core; sR = sR * drive_core;
+      );
+      sL += topo_bias; sR += topo_bias;
+      user_sat = 1.0 + (s_analog * 0.03); 
+      total_drive = topo_drive_push * user_sat;
+      sL = tanh(sL * total_drive); sR = tanh(sR * total_drive);
+      sL -= (topo_bias * 0.95); sR -= (topo_bias * 0.95);
+      sL *= 1.05; sR *= 1.05;
+  );
+  // IF t_engine_mode == 0, we simply skip this block and signal flows 
+  // directly to the original flux/interstage code below.
+  // ---------------------------
 
   flux_freq = 16500 - (unit_seed * (6500 * topology_flux_depth)); 
   flux_coeff = (1 - s_flux * 0.12) * (flux_freq * inv_srate);
@@ -552,8 +610,6 @@ xt_leak = 0;
   (abs(heatR) < 0.000000001) ? heatR = 0;
   
   // FIX v1.8.1: FORCE INTERNAL SILENCE
-  // Instead of passing a "ghost signal" (rawL * s_calib), we output 0.
-  // This ensures procL is silence, and spl0 becomes pure rawL during bypass.
   sL = 0; sR = 0;
 );
 
@@ -636,26 +692,42 @@ is_xt_visually_active = (t_xtalk == 1 && t_bypass == 0);
 draw_button(50, 170, 450, 35, is_xt_visually_active, t_xtalk == 1 ? "ANALOG CROSSTALK: ON" : "ANALOG CROSSTALK: OFF", 0.8, 0.4, 1);
 (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 170 && mouse_y <= 205) ? ( t_xtalk = 1 - t_xtalk; gmem[21] = t_xtalk; slider_automate(t_xtalk); );
 
+// XT Mode Row (Y=207)
 t_topo == 2 ? (
-  mode_name = (t_xt_mode == 0) ? "MODE: VINTAGE (-75dB)" : (t_xt_mode == 1) ? "MODE: MODERN (-95dB)" : "MODE: BOUTIQUE (-115dB)";
+  mode_name = (t_xt_mode == 0) ? "XT MODE: VINTAGE" : (t_xt_mode == 1) ? "XT MODE: MODERN" : "XT MODE: BOUTIQUE";
   xt_mode_state = (t_xtalk == 1 && t_bypass == 0) ? 2 : 0;
-  draw_button(50, 207, 450, 20, xt_mode_state, mode_name, 0.2, 0.35, 0.7);
-  (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 207 && mouse_y <= 227) ? ( 
+  draw_button(50, 207, 220, 20, xt_mode_state, mode_name, 0.2, 0.35, 0.7);
+  (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= 207 && mouse_y <= 227) ? ( 
     t_xt_mode = (t_xt_mode + 1) % 3; 
     slider_automate(t_xt_mode);
     gmem[23] = t_xt_mode; 
   );
-  r_y = 235;
 ) : (
   gfx_set(1, 1, 1, 0.3); gfx_setfont(1, "Arial", 11);
   slave_mode = (t_xt_mode == 0) ? "VINTAGE" : (t_xt_mode == 1) ? "MODERN" : "BOUTIQUE";
-  info_s = sprintf(#, "XT MODE SYNC: %s", slave_mode);
+  info_s = sprintf(#, "XT SYNC: %s", slave_mode);
   gfx_measurestr(info_s, iw, ih);
-  gfx_x = 50 + (450 - iw)/2; gfx_y = 210;
+  gfx_x = 50; gfx_y = 210;
   gfx_drawstr(info_s);
-  r_y = 230;
 );
 
+// --- NEW HYBRID ENGINE SWITCH (Right side of XT row) ---
+// Global Engine Button
+eng_name = (t_engine_mode == 0) ? "ENGINE: ORIGINAL v2.0" : "ENGINE: IRON MOD";
+// Green if Original, Red/Orange if Mod
+eng_r = (t_engine_mode == 0) ? 0.2 : 0.8;
+eng_g = (t_engine_mode == 0) ? 0.6 : 0.2;
+eng_b = 0.2;
+
+draw_button(280, 207, 220, 20, 1, eng_name, eng_r, eng_g, eng_b);
+(mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= 207 && mouse_y <= 227) ? (
+  t_engine_mode = 1 - t_engine_mode;
+  slider_automate(t_engine_mode);
+  gmem[24] = t_engine_mode; // PUSH TO GLOBAL INSTANTLY
+);
+
+// REGEN/SHUFFLE moved down slightly to Y=240
+r_y = 240;
 draw_button(50, r_y, 220, 35, 0, "REGEN ID (LOCAL)", 0, 0, 0);
 (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
   t_id = floor(rand(180)) + 1; 
@@ -675,7 +747,7 @@ has_master == 0 ? (
   gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 13, 'b');
   warn_s = "WARNING: NO MASTER DETECTED (NETWORK SAG INACTIVE)";
   gfx_measurestr(warn_s, ww, wh);
-  gfx_x = 50 + (450 - ww)/2; gfx_y = 275;
+  gfx_x = 50 + (450 - ww)/2; gfx_y = 285;
   gfx_drawstr(warn_s);
 );
 
@@ -683,17 +755,17 @@ id_conflict == 1 ? (
   gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b');
   warn_text = "ID DUPLICATE!";
   gfx_measurestr(warn_text, dw, dh);
-  gfx_x = 500 - dw; gfx_y = 305; 
+  gfx_x = 500 - dw; gfx_y = 315; 
   gfx_drawstr(warn_text);
 );
 
-gfx_set(1, 1, 1, 0.05); gfx_rect(50, 295, 450, 1);
+gfx_set(1, 1, 1, 0.05); gfx_rect(50, 305, 450, 1);
 gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
 topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
 cal_str = (t_topo == 1) ? (t_calib_mode == 0 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
 status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal_str, cluster_id + 1);
 gfx_measurestr(status_str, sw, sh);
-gfx_x = 50 + (450 - sw)/2; gfx_y = 305;
+gfx_x = 50 + (450 - sw)/2; gfx_y = 315;
 gfx_drawstr(status_str);
 
 // --- WARNING UI: WINDOW TOO SMALL ---
