@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.0
+// version: 2.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -97,28 +97,50 @@ BANK_B_OFFSET = 300;
 // SAFETY INITIALIZATION
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
 
+// --- ENGINEER MOD: CIRCUIT VARS ---
+topo_bias = 0;       // Simula DC Offset (Armónicos Pares)
+topo_core = 0;       // Simula Hysteresis (Core saturation)
+topo_clip_hard = 0;  // 0=Soft (Tube/Tape), 1=Hard (OpAmp)
+// ---------------------------------
+
 function to_int(val) ( floor(val * 10 + 0.5); );
 
-// --- PRESET LOADING FUNCTION ---
+// --- PRESET LOADING FUNCTION (MODIFIED) ---
 function load_flavor(flavor_id) (
   loading_preset = 1; 
+  
   flavor_id == 1 ? ( // British Class A
+    // MOD: High Bias (Even Harmonics), Heavy Core, Soft Knee
+    topo_bias = 0.15; topo_core = 0.4; topo_clip_hard = 0;
+    
     t_topo == 0 ? ( t_flux=35; t_thermal=40; t_analog=25; );
     t_topo == 1 ? ( t_flux=25; t_thermal=50; t_analog=30; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=15; t_thermal=30; t_analog=20; t_xt_mode=0; );
   ) : flavor_id == 2 ? ( // Solid State E
+    // MOD: No Bias (Symmetric), Low Core, Harder Knee (Odd Harmonics)
+    topo_bias = 0.0; topo_core = 0.05; topo_clip_hard = 0.8;
+    
     t_topo == 0 ? ( t_flux=20; t_thermal=20; t_analog=15; );
     t_topo == 1 ? ( t_flux=15; t_thermal=35; t_analog=20; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=10; t_thermal=20; t_analog=12; t_xt_mode=1; );
   ) : flavor_id == 3 ? ( // US Discrete
+    // MOD: Medium Bias, Medium Core, Hybrid Knee
+    topo_bias = 0.05; topo_core = 0.2; topo_clip_hard = 0.4;
+    
     t_topo == 0 ? ( t_flux=10; t_thermal=10; t_analog=10; );
     t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=5; t_thermal=10; t_analog=8; t_xt_mode=0; );
   ) : flavor_id == 4 ? ( // Modern
+    // MOD: Clean
+    topo_bias = 0.0; topo_core = 0.0; topo_clip_hard = 0.0;
+    
     t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
+  ) : ( // Custom / Default
+    topo_bias = 0.0; topo_core = 0.0; topo_clip_hard = 0.0;
   );
+  
   slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog); 
   slider_automate(t_calib_mode); slider_automate(t_xt_mode);
   
@@ -142,6 +164,8 @@ cur_analog_int = to_int(t_analog);
 // DIRTY STATE CHECK
 (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
   t_flavor = 0; slider_automate(t_flavor);
+  // Reset circuit vars to clean on custom edit
+  topo_bias = 0.0; topo_core = 0.0; topo_clip_hard = 0.0; 
 );
 
 // DETECT LINK TOGGLE
@@ -158,6 +182,8 @@ t_topo != last_topo ? (
     t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
     t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
     slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
+    // Reset circuit vars
+    topo_bias = 0.0; topo_core = 0.0; topo_clip_hard = 0.0; 
   );
   last_topo = t_topo;
   last_flux_int = to_int(t_flux); 
@@ -308,7 +334,7 @@ last_link_state = t_link_on;
     t_flavor = 0; slider_automate(t_flavor);
   );
   (dn_trim != 0) ? (
-    t_out_gain += dn_trim; // FIX
+    t_out_gain += dn_trim; 
     slider_automate(t_out_gain);
     target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
     last_trim_int = to_int(t_out_gain);
@@ -339,6 +365,9 @@ last_link_state = t_link_on;
   (du_flux != 0 || du_thermal != 0 || du_analog != 0) ? (
     (t_flavor != 0) ? (
       t_flavor = 0; slider_automate(t_flavor);
+      // Reset circuit vars
+      topo_bias = 0.0; topo_core = 0.0; topo_clip_hard = 0.0; 
+      
       scope_ch_active ? gmem[1000 + 4] = -1;
       scope_bus_active ? gmem[2000 + 4] = -1;
       scope_mtr_active ? gmem[3000 + 4] = -1;
@@ -490,6 +519,48 @@ xt_leak = 0;
     sR += xt_leak * s_bypass;
   );
 
+  // --- ENGINEER MOD: COMPONENT MODELING STAGE ---
+  // Injected BEFORE the Slew Limiter (Interstage)
+  (t_flavor > 0 && s_bypass > 0) ? (
+    
+    // 1. INPUT TRANSFORMER SATURATION (Core Simulation)
+    // Simula la resistencia magnética en bajas frecuencias
+    (topo_core > 0) ? (
+       drive_core = 1.0 + (s_thermal * 0.05); // Usa variable thermal para empujar el núcleo
+       sL = sL * drive_core; sR = sR * drive_core;
+       sL = sL / (1.0 + (abs(sL) * topo_core * 0.2)); 
+       sR = sR / (1.0 + (abs(sR) * topo_core * 0.2));
+    );
+
+    // 2. DISCRETE OP-AMP STAGE (Harmonics & Bias)
+    // Aplicamos Bias (asimetría) para generar 2nd Armónico
+    sL += topo_bias; 
+    sR += topo_bias;
+
+    // Saturación Polinomial (Más barato que tanh y controlable)
+    // x - (x^3)/3 es la clásica saturación suave de cinta/tubo
+    sat_amount = 0.1 + (s_analog * 0.02); // Vinculamos a tu slider Analog
+    
+    // Soft Clip vs Hard Clip blend
+    Math_ClipL = sL - (sL * sL * sL * sat_amount);
+    Math_HardL = max(-1.2, min(1.2, sL * 1.1)); // Hard limit
+    
+    Math_ClipR = sR - (sR * sR * sR * sat_amount);
+    Math_HardR = max(-1.2, min(1.2, sR * 1.1)); 
+
+    // Mezcla según topología (topo_clip_hard)
+    sL = Math_ClipL * (1 - topo_clip_hard) + Math_HardL * topo_clip_hard;
+    sR = Math_ClipR * (1 - topo_clip_hard) + Math_HardR * topo_clip_hard;
+
+    // Quitamos el Bias (DC Offset Blocking Capacitor)
+    sL -= topo_bias;
+    sR -= topo_bias;
+    
+    // Compensación de ganancia leve por la saturación
+    sL *= 0.98; sR *= 0.98;
+  );
+  // --- END OF MOD ---
+
   flux_freq = 16500 - (unit_seed * (6500 * topology_flux_depth)); 
   flux_coeff = (1 - s_flux * 0.12) * (flux_freq * inv_srate);
   apL_in = sL; sL = (apL_in * (flux_coeff - 1) + apL) / (1 + flux_coeff); apL = apL_in + sL * flux_coeff;
@@ -551,9 +622,6 @@ xt_leak = 0;
   (abs(heatL) < 0.000000001) ? heatL = 0;
   (abs(heatR) < 0.000000001) ? heatR = 0;
   
-  // FIX v1.8.1: FORCE INTERNAL SILENCE
-  // Instead of passing a "ghost signal" (rawL * s_calib), we output 0.
-  // This ensures procL is silence, and spl0 becomes pure rawL during bypass.
   sL = 0; sR = 0;
 );
 
