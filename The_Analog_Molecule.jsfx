@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 1.8
+// version: 1.9
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -13,14 +13,18 @@ options:gmem=AnalogMoleculeNetwork
 slider1:t_id=1<1,180,1>Analog Channel ID
 slider2:t_topo=0<0,2,1{Channel (Discrete),Bus (Transformer),Master (Main Leader)}>Topology
 slider3:t_calib_mode=1<0,1,1{Hot (0dB),Normal (-4dB)}>Bus Calibration
-slider4:t_flux=20<0,100,0.5>3D Flux (Phase Depth) %
-slider5:t_thermal=20<0,100,0.5>Thermal Bloom (Inertia) %
-slider6:t_analog=12<0,100,1>Analog Texture (Interstage) %
+slider4:t_flux=20<0,100,0.1>3D Flux (Phase Depth) %
+slider5:t_thermal=20<0,100,0.1>Thermal Bloom (Inertia) %
+slider6:t_analog=12<0,100,0.1>Analog Texture (Interstage) %
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
 slider8:t_out_gain=0<-12,12,0.1>Output Gain (dB)
 slider9:t_bypass=0<0,1,1{Active,Bypassed}>Global State
 slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
 slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Master XT Mode
+// UI CONTROL VARIABLES
+slider12:t_link_on=0<0,1,1{Off,On}>-Link Active
+slider13:t_flavor=0<0,4,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering}>-Console Flavor
+// Slider 14 REMOVED (No Groups)
 slider64:s_init_done=0<0,1,1>-
 
 in_pin:left input
@@ -46,6 +50,26 @@ last_global_bypass = gmem[7];
 last_global_xtalk = gmem[21];
 last_global_calib = gmem[22];
 last_global_xt_mode = gmem[23]; 
+
+// Link System Trackers
+net_flux_mirror = 0;
+net_thermal_mirror = 0;
+net_analog_mirror = 0;
+net_trim_mirror = 0;
+
+last_flux_int = 0;
+last_thermal_int = 0;
+last_analog_int = 0;
+last_trim_int = 0;
+
+last_flavor = t_flavor;
+my_flavor_cmd = 0;
+
+last_link_state = t_link_on;
+force_refresh = 1;
+
+loading_preset = 0;
+id_conflict = 0; 
 
 // State variables
 istL_A1=0; istL_B1=0; istL_A2=0; istL_B2=0; istL_A3=0; istL_B3=0;
@@ -74,13 +98,78 @@ BANK_B_OFFSET = 300;
 // SAFETY INITIALIZATION
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
 
+function to_int(val) ( floor(val * 10 + 0.5); );
+
+// --- PRESET LOADING FUNCTION ---
+function load_flavor(flavor_id) (
+  loading_preset = 1; 
+  flavor_id == 1 ? ( // British Class A
+    t_topo == 0 ? ( t_flux=35; t_thermal=40; t_analog=25; );
+    t_topo == 1 ? ( t_flux=25; t_thermal=50; t_analog=30; t_calib_mode=0; );
+    t_topo == 2 ? ( t_flux=15; t_thermal=30; t_analog=20; t_xt_mode=0; );
+  ) : flavor_id == 2 ? ( // Solid State E
+    t_topo == 0 ? ( t_flux=20; t_thermal=20; t_analog=15; );
+    t_topo == 1 ? ( t_flux=15; t_thermal=35; t_analog=20; t_calib_mode=1; );
+    t_topo == 2 ? ( t_flux=10; t_thermal=20; t_analog=12; t_xt_mode=1; );
+  ) : flavor_id == 3 ? ( // US Discrete
+    t_topo == 0 ? ( t_flux=10; t_thermal=10; t_analog=10; );
+    t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; t_calib_mode=0; );
+    t_topo == 2 ? ( t_flux=5; t_thermal=10; t_analog=8; t_xt_mode=0; );
+  ) : flavor_id == 4 ? ( // Modern Mastering
+    t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
+    t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; t_calib_mode=1; );
+    t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
+  );
+  slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog); 
+  slider_automate(t_calib_mode); slider_automate(t_xt_mode);
+  
+  last_flux_int = to_int(t_flux);
+  last_thermal_int = to_int(t_thermal);
+  last_analog_int = to_int(t_analog);
+  last_trim_int = to_int(t_out_gain);
+  
+  loading_preset = 0; 
+);
+
 @slider
+// HIDE CONTROL SLIDERS
+slider_show(t_link_on, 0);
+slider_show(t_flavor, 0);
+
+cur_flux_int = to_int(t_flux);
+cur_thermal_int = to_int(t_thermal);
+cur_analog_int = to_int(t_analog);
+
+// DIRTY STATE CHECK
+(loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
+  t_flavor = 0; slider_automate(t_flavor);
+);
+
+// DETECT LINK TOGGLE
+(t_link_on != last_link_state) ? (
+  force_refresh = 1;
+  last_link_state = t_link_on;
+);
+
 t_topo != last_topo ? (
-  t_topo == 0 ? ( t_flux = 20; t_thermal = 20; t_analog = 12; ) : 
-  t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
-  t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
-  slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
+  t_flavor > 0 ? (
+    load_flavor(t_flavor);
+  ) : (
+    t_topo == 0 ? ( t_flux = 20; t_thermal = 20; t_analog = 12; ) : 
+    t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
+    t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
+    slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
+  );
   last_topo = t_topo;
+  last_flux_int = to_int(t_flux); 
+  last_thermal_int = to_int(t_thermal); 
+  last_analog_int = to_int(t_analog);
+  last_trim_int = to_int(t_out_gain);
+  
+  my_scope_ch = (t_topo == 0);
+  my_scope_bus = (t_topo == 1);
+  my_scope_mtr = (t_topo == 2);
+  force_refresh = 1;
 );
 
 gmem[7] = t_bypass;
@@ -113,8 +202,25 @@ s_init_done == 0 ? (
   slider_automate(t_id); 
   unit_seed = t_id / 180;
   cluster_id = floor((t_id - 1) / 18);
-  s_init_done = 1; 
+  s_init_done = 1;
+  
+  last_flux_int = to_int(t_flux); 
+  last_thermal_int = to_int(t_thermal); 
+  last_analog_int = to_int(t_analog);
+  last_trim_int = to_int(t_out_gain);
+  last_link_state = t_link_on;
+  
+  my_scope_ch = (t_topo == 0);
+  my_scope_bus = (t_topo == 1);
+  my_scope_mtr = (t_topo == 2);
+  force_refresh = 1;
 );
+
+// --- DUPLICATE ID CHECK ---
+chk_addr = 10000 + t_id;
+occupant = gmem[chk_addr];
+(occupant > 0 && occupant != instance_id) ? id_conflict = 1 : id_conflict = 0;
+gmem[chk_addr] = instance_id;
 
 gmem[0] != last_global_sync ? (
   t_topo < 2 ? (
@@ -127,6 +233,168 @@ gmem[0] != last_global_sync ? (
   last_global_sync = gmem[0];
 );
 
+// --- BROADCAST LINK ALL ---
+bc_addr = 70 + t_topo;
+
+(t_link_on == 1 && last_link_state != 1) ? gmem[bc_addr] = 1;
+(last_link_state == 1 && t_link_on != 1) ? gmem[bc_addr] = 0;
+
+bc_val = gmem[bc_addr];
+(bc_val == 1 && t_link_on != 1) ? ( t_link_on = 1; slider_automate(t_link_on); force_refresh = 1; );
+(bc_val == 0 && t_link_on == 1) ? ( t_link_on = 0; slider_automate(t_link_on); force_refresh = 1; );
+
+last_link_state = t_link_on;
+
+// --- LINKING SYSTEM V4.3 ---
+(t_link_on > 0) ? (
+  l_base = 5000;
+  
+  // SELF-PUBLISH ACTIVE STATE
+  t_topo == 0 ? gmem[l_base+0] = 1;
+  t_topo == 1 ? gmem[l_base+1] = 1;
+  t_topo == 2 ? gmem[l_base+2] = 1;
+
+  // Read Network State
+  scope_ch_active = gmem[l_base+0];
+  scope_bus_active = gmem[l_base+1];
+  scope_mtr_active = gmem[l_base+2];
+  
+  my_bank = 1000 + (t_topo * 1000);
+
+  // SOFT TAKEOVER
+  force_refresh ? (
+    net_flux_mirror = gmem[my_bank];
+    net_thermal_mirror = gmem[my_bank+1];
+    net_analog_mirror = gmem[my_bank+2];
+    net_trim_mirror = gmem[my_bank+3];
+    
+    last_flux_int = to_int(t_flux);
+    last_thermal_int = to_int(t_thermal);
+    last_analog_int = to_int(t_analog);
+    last_trim_int = to_int(t_out_gain);
+    
+    force_refresh = 0;
+  );
+
+  // 1. PROCESS NETWORK INCOMING
+  g_flux = gmem[my_bank];
+  g_thermal = gmem[my_bank+1];
+  g_analog = gmem[my_bank+2];
+  g_trim = gmem[my_bank+3];
+  
+  dn_flux = g_flux - net_flux_mirror;
+  dn_thermal = g_thermal - net_thermal_mirror;
+  dn_analog = g_analog - net_analog_mirror;
+  dn_trim = g_trim - net_trim_mirror;
+  
+  (dn_flux != 0) ? (
+    t_flux = max(0, min(100, (to_int(t_flux) + dn_flux) / 10.0));
+    slider_automate(t_flux);
+    last_flux_int = to_int(t_flux); 
+    net_flux_mirror = g_flux;       
+    t_flavor = 0; slider_automate(t_flavor);
+  );
+  (dn_thermal != 0) ? (
+    t_thermal = max(0, min(100, (to_int(t_thermal) + dn_thermal) / 10.0));
+    slider_automate(t_thermal);
+    last_thermal_int = to_int(t_thermal);
+    net_thermal_mirror = g_thermal;
+    t_flavor = 0; slider_automate(t_flavor);
+  );
+  (dn_analog != 0) ? (
+    t_analog = max(0, min(100, (to_int(t_analog) + dn_analog) / 10.0));
+    slider_automate(t_analog);
+    last_analog_int = to_int(t_analog);
+    net_analog_mirror = g_analog;
+    t_flavor = 0; slider_automate(t_flavor);
+  );
+  (dn_trim != 0) ? (
+    t_out_gain += (dn_trim / 10.0);
+    slider_automate(t_out_gain);
+    target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
+    last_trim_int = to_int(t_out_gain);
+    net_trim_mirror = g_trim;
+  );
+
+  // 2. PROCESS PRESET SYNC
+  net_flavor = gmem[my_bank + 4];
+  (net_flavor != 0 && net_flavor != my_flavor_cmd) ? (
+    new_flav = (net_flavor == -1) ? 0 : net_flavor;
+    t_flavor = new_flav; slider_automate(t_flavor);
+    new_flav > 0 ? ( 
+      load_flavor(new_flav); 
+      last_flux_int = to_int(t_flux); last_thermal_int = to_int(t_thermal); last_analog_int = to_int(t_analog);
+    );
+    my_flavor_cmd = net_flavor;
+  );
+
+  // 3. PROCESS USER OUTGOING
+  cur_flux_int = to_int(t_flux);
+  cur_thermal_int = to_int(t_thermal);
+  cur_analog_int = to_int(t_analog);
+  
+  du_flux = cur_flux_int - last_flux_int;
+  du_thermal = cur_thermal_int - last_thermal_int;
+  du_analog = cur_analog_int - last_analog_int;
+  
+  (du_flux != 0 || du_thermal != 0 || du_analog != 0) ? (
+    (t_flavor != 0) ? (
+      t_flavor = 0; slider_automate(t_flavor);
+      scope_ch_active ? gmem[1000 + 4] = -1;
+      scope_bus_active ? gmem[2000 + 4] = -1;
+      scope_mtr_active ? gmem[3000 + 4] = -1;
+    );
+
+    scope_ch_active ? (
+      base = 1000;
+      du_flux != 0 ? atomic_add(gmem[base+0], du_flux);
+      du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal);
+      du_analog != 0 ? atomic_add(gmem[base+2], du_analog);
+    );
+    scope_bus_active ? (
+      base = 2000;
+      du_flux != 0 ? atomic_add(gmem[base+0], du_flux);
+      du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal);
+      du_analog != 0 ? atomic_add(gmem[base+2], du_analog);
+    );
+    scope_mtr_active ? (
+      base = 3000;
+      du_flux != 0 ? atomic_add(gmem[base+0], du_flux);
+      du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal);
+      du_analog != 0 ? atomic_add(gmem[base+2], du_analog);
+    );
+    
+    net_flux_mirror += du_flux;
+    net_thermal_mirror += du_thermal;
+    net_analog_mirror += du_analog;
+    
+    last_flux_int = cur_flux_int;
+    last_thermal_int = cur_thermal_int;
+    last_analog_int = cur_analog_int;
+  );
+  
+  (t_flavor != last_flavor && t_flavor > 0) ? (
+    scope_ch_active ? gmem[1000 + 4] = t_flavor;
+    scope_bus_active ? gmem[2000 + 4] = t_flavor;
+    scope_mtr_active ? gmem[3000 + 4] = t_flavor;
+    last_flavor = t_flavor;
+  );
+  (t_flavor != last_flavor) ? last_flavor = t_flavor;
+
+) : (
+  last_flux_int = to_int(t_flux); 
+  last_thermal_int = to_int(t_thermal); 
+  last_analog_int = to_int(t_analog); 
+  last_trim_int = to_int(t_out_gain);
+  last_flavor = t_flavor;
+  
+  // Ensure we stop publishing if link is off
+  t_topo == 0 ? gmem[5000+0] = 0;
+  t_topo == 1 ? gmem[5000+1] = 0;
+  t_topo == 2 ? gmem[5000+2] = 0;
+);
+
+// ... (Physics & Audio) ...
 t_topo == 2 ? (
   gmem[30] = instance_id; 
   gmem[31] += 1; 
@@ -284,7 +552,7 @@ xt_leak = 0;
   (abs(heatL) < 0.000000001) ? heatL = 0;
   (abs(heatR) < 0.000000001) ? heatR = 0;
   
-  // FIX v1.8: FORCE INTERNAL SILENCE
+  // FIX v1.8.1: FORCE INTERNAL SILENCE
   // Instead of passing a "ghost signal" (rawL * s_calib), we output 0.
   // This ensures procL is silence, and spl0 becomes pure rawL during bypass.
   sL = 0; sR = 0;
@@ -322,8 +590,96 @@ function draw_button(x, y, w, h, active, label, r, g, b) (
   gfx_drawstr(label);
 );
 
+function draw_small_button(x, y, w, h, active, label) (
+  active ? gfx_set(0.4, 0.8, 0.4, 1) : gfx_set(0.2, 0.2, 0.25, 1);
+  gfx_rect(x, y, w, h);
+  gfx_set(1, 1, 1, 0.8);
+  gfx_setfont(1, "Arial", 11);
+  gfx_measurestr(label, lw, lh);
+  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
+  gfx_drawstr(label);
+);
+
 gfx_set(1, 1, 1, 0.1); gfx_x = 10; gfx_y = 15; gfx_setfont(1, "Arial", 28, 'b');
 gfx_drawstr("THE ANALOG MOLECULE");
+
+// --- FLAVOR DISPLAY (UI) ---
+flav_name = (t_flavor == 0) ? "CUSTOM / USER" : (t_flavor == 1) ? "BRITISH CLASS A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : "MODERN MASTERING";
+gfx_set(1, 1, 1, 0.6); gfx_setfont(1, "Arial", 12);
+gfx_measurestr(flav_name, fw, fh);
+gfx_x = 415 - fw; gfx_y = 10; 
+gfx_drawstr(flav_name);
+
+draw_small_button(420, 10, 20, 15, 0, "V");
+(mouse_cap & 1 && !last_cap && mouse_x >= 420 && mouse_x <= 440 && mouse_y >= 10 && mouse_y <= 25) ? (
+  gfx_x = mouse_x; gfx_y = mouse_y;
+  sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern Mastering");
+  sel > 0 ? ( t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
+);
+
+// --- LINK & TRIM UI ---
+// LINK ALL TOGGLE
+draw_small_button(450, 15, 80, 20, t_link_on, "LINK: ALL");
+(mouse_cap & 1 && !last_cap && mouse_x >= 450 && mouse_x <= 530 && mouse_y >= 15 && mouse_y <= 35) ? (
+  t_link_on = 1 - t_link_on; slider_automate(t_link_on);
+);
+
+// Link Scope & Trim (Only when Linked)
+t_link_on ? (
+  l_base = 5000;
+  
+  // FIX v3.8: SELF-PUBLISH ACTIVE STATE
+  t_topo == 0 ? gmem[l_base+0] = 1;
+  t_topo == 1 ? gmem[l_base+1] = 1;
+  t_topo == 2 ? gmem[l_base+2] = 1;
+  
+  st_ch = gmem[l_base+0]; st_bus = gmem[l_base+1]; st_mtr = gmem[l_base+2];
+
+  draw_small_button(450, 40, 25, 15, st_ch, "Ch");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 450 && mouse_x <= 475 && mouse_y >= 40 && mouse_y <= 55) ? ( 
+    gmem[l_base+0] = 1 - gmem[l_base+0]; 
+    // Force Wake Up: Channels
+    gmem[70] = (gmem[l_base+0] == 1);
+  );
+  
+  draw_small_button(477, 40, 26, 15, st_bus, "Bus");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 477 && mouse_x <= 503 && mouse_y >= 40 && mouse_y <= 55) ? ( 
+    gmem[l_base+1] = 1 - gmem[l_base+1]; 
+    // Force Wake Up: Buses
+    gmem[71] = (gmem[l_base+1] == 1);
+  );
+  
+  draw_small_button(505, 40, 25, 15, st_mtr, "Mtr");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 505 && mouse_x <= 530 && mouse_y >= 40 && mouse_y <= 55) ? ( 
+    gmem[l_base+2] = 1 - gmem[l_base+2]; 
+    // Force Wake Up: Master
+    gmem[72] = (gmem[l_base+2] == 1);
+  );
+
+  draw_small_button(450, 58, 38, 15, 0, "<");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 450 && mouse_x <= 488 && mouse_y >= 58 && mouse_y <= 73) ? (
+    // FIX v4.3: Micro Trim 0.025
+    st_ch ? atomic_add(gmem[1000 + 3], -0.025);
+    st_bus ? atomic_add(gmem[2000 + 3], -0.025);
+    st_mtr ? atomic_add(gmem[3000 + 3], -0.025);
+  );
+  
+  draw_small_button(492, 58, 38, 15, 0, ">");
+  (mouse_cap & 1 && !last_cap && mouse_x >= 492 && mouse_x <= 530 && mouse_y >= 58 && mouse_y <= 73) ? (
+    st_ch ? atomic_add(gmem[1000 + 3], 0.025);
+    st_bus ? atomic_add(gmem[2000 + 3], 0.025);
+    st_mtr ? atomic_add(gmem[3000 + 3], 0.025);
+  );
+);
+
+// DUPLICATE ID WARNING UI (Bottom Right)
+id_conflict == 1 ? (
+  gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b');
+  warn_text = "ID DUPLICATE!";
+  gfx_measurestr(warn_text, dw, dh);
+  gfx_x = 500 - dw; gfx_y = 305; 
+  gfx_drawstr(warn_text);
+);
 
 draw_meter(min(meter_input * 6.5, 1), 50, 75, 450, 12, "CIRCUIT DRIVE STRENGTH", 0);
 
@@ -357,8 +713,16 @@ t_topo == 2 ? (
   r_y = 230;
 );
 
-draw_button(85, r_y, 380, 35, 0, "RANDOMIZE CONSOLE TOPOLOGY", 0, 0, 0);
-(mouse_cap & 1 && !last_cap && mouse_x >= 85 && mouse_x <= 465 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
+draw_button(50, r_y, 220, 35, 0, "REGEN ID (LOCAL)", 0, 0, 0);
+(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
+  t_id = floor(rand(180)) + 1; 
+  slider_automate(t_id); 
+  unit_seed = t_id / 180; 
+  cluster_id = floor((t_id - 1) / 18); 
+);
+
+draw_button(280, r_y, 220, 35, 0, "RESHUFFLE ALL (GLOBAL)", 0.2, 0, 0);
+(mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
   gmem[11] = floor(rand(1000)); 
   gmem[1] = 0; 
   gmem[0] += 1; 
