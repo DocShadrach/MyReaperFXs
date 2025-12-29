@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.1.1
+// version: 2.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -33,6 +33,23 @@ slider13:t_flavor=0<0,4,1{Custom,British Class A,Solid State E,US Discrete,Moder
 // HYBRID ENGINE SWITCH
 slider14:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod}>-Engine Mode
 
+// --- V2.2 FILTERS (LOCAL ONLY) ---
+slider15:t_hpf=0<0,500,1>High Pass Filter (Hz)
+slider16:t_lpf=20000<2000,20000,10>Low Pass Filter (Hz)
+slider17:t_filters_on=1<0,1,1{Off,On}>Filters Active (Pre-Sat)
+
+// --- FILTER PRESETS (Hidden Memory for TCP UI) ---
+slider30:40<0,1000,1>-HPF Btn 1
+slider31:80<0,1000,1>-HPF Btn 2
+slider32:100<0,1000,1>-HPF Btn 3
+slider33:120<0,1000,1>-HPF Btn 4
+slider34:150<0,1000,1>-HPF Btn 5
+slider35:6000<1000,22000,1>-LPF Btn 1
+slider36:10000<1000,22000,1>-LPF Btn 2
+slider37:12000<1000,22000,1>-LPF Btn 3
+slider38:15000<1000,22000,1>-LPF Btn 4
+slider39:18000<1000,22000,1>-LPF Btn 5
+
 slider64:s_init_done=0<0,1,1>-
 
 in_pin:left input
@@ -45,6 +62,41 @@ out_pin:right output
 function tanh(x) local(e2x) (
   e2x = exp(2 * x);
   (e2x - 1) / (e2x + 1);
+);
+
+// --- FILTER CALCULATION (OPTIMIZED BUTTERWORTH) ---
+function update_filters() (
+  // HPF Coefficients (Only calc if valid)
+  t_hpf >= 20 ? (
+    hpf_freq = t_hpf;
+    hpf_q = 0.707; 
+    w0_h = 2 * $pi * hpf_freq / srate;
+    cosw0_h = cos(w0_h);
+    alpha_h = sin(w0_h) / (2 * hpf_q);
+    
+    a0_h = 1 + alpha_h;
+    h_a0 = (1 + cosw0_h) / 2 / a0_h;
+    h_a1 = -(1 + cosw0_h) / a0_h;
+    h_a2 = (1 + cosw0_h) / 2 / a0_h;
+    h_b1 = -2 * cosw0_h / a0_h;
+    h_b2 = (1 - alpha_h) / a0_h;
+  );
+
+  // LPF Coefficients (Only calc if valid)
+  t_lpf < 20000 ? (
+    lpf_freq = t_lpf;
+    lpf_q = 0.707; 
+    w0_l = 2 * $pi * lpf_freq / srate;
+    cosw0_l = cos(w0_l);
+    alpha_l = sin(w0_l) / (2 * lpf_q);
+
+    a0_l = 1 + alpha_l;
+    l_a0 = (1 - cosw0_l) / 2 / a0_l;
+    l_a1 = (1 - cosw0_l) / a0_l;
+    l_a2 = (1 - cosw0_l) / a0_l;
+    l_b1 = -2 * cosw0_l / a0_l;
+    l_b2 = (1 - alpha_l) / a0_l;
+  );
 );
 
 inv_srate = 1/srate;
@@ -106,6 +158,15 @@ xt_leak = 0;
 xt_lp=0; xt_hp=0;
 xt_gain = 10^(-75/20); 
 
+// Filter State Variables
+hpf_x1L=0; hpf_x2L=0; hpf_y1L=0; hpf_y2L=0;
+hpf_x1R=0; hpf_x2R=0; hpf_y1R=0; hpf_y2R=0;
+lpf_x1L=0; lpf_x2L=0; lpf_y1L=0; lpf_y2L=0;
+lpf_x1R=0; lpf_x2R=0; lpf_y1R=0; lpf_y2R=0;
+
+// Update tracking for filters
+last_hpf = -1; last_lpf = -1; last_filt_state = -1;
+
 // MEMORY MAP CONSTANTS
 PTR_BANK = 15;      
 BANK_A_OFFSET = 200; 
@@ -120,27 +181,26 @@ topo_bias = 0; topo_core = 0; topo_drive_push = 0;
 function to_int(val) ( floor(val * 10 + 0.5); );
 
 // --- PRESET LOADING FUNCTION (HYBRID) ---
-// Now sets BOTH the sliders AND the hidden circuit vars
 function load_flavor(flavor_id) (
   loading_preset = 1; 
   
   flavor_id == 1 ? ( // British Class A
-    topo_bias = 0.15; topo_core = 0.3; topo_drive_push = 1.1; // MOD VARS
+    topo_bias = 0.15; topo_core = 0.3; topo_drive_push = 1.1; 
     t_topo == 0 ? ( t_flux=35; t_thermal=40; t_analog=25; );
     t_topo == 1 ? ( t_flux=25; t_thermal=50; t_analog=30; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=15; t_thermal=30; t_analog=20; t_xt_mode=0; );
   ) : flavor_id == 2 ? ( // Solid State E
-    topo_bias = 0.0; topo_core = 0.05; topo_drive_push = 1.25; // MOD VARS
+    topo_bias = 0.0; topo_core = 0.05; topo_drive_push = 1.25; 
     t_topo == 0 ? ( t_flux=20; t_thermal=20; t_analog=15; );
     t_topo == 1 ? ( t_flux=15; t_thermal=35; t_analog=20; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=10; t_thermal=20; t_analog=12; t_xt_mode=1; );
   ) : flavor_id == 3 ? ( // US Discrete
-    topo_bias = 0.05; topo_core = 0.15; topo_drive_push = 1.15; // MOD VARS
+    topo_bias = 0.05; topo_core = 0.15; topo_drive_push = 1.15; 
     t_topo == 0 ? ( t_flux=10; t_thermal=10; t_analog=10; );
     t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; t_calib_mode=0; );
     t_topo == 2 ? ( t_flux=5; t_thermal=10; t_analog=8; t_xt_mode=0; );
   ) : flavor_id == 4 ? ( // Modern
-    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; // MOD VARS
+    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; 
     t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; t_calib_mode=1; );
     t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
@@ -165,6 +225,15 @@ slider_show(t_link_on, 0);
 slider_show(t_flavor, 0);
 slider_show(t_engine_mode, 0); 
 
+// --- SAFETY SNAP: Forbidden Zone Fix ---
+// If the user manually sets slider between 1 and 19 via Generic UI, snap it.
+(t_hpf > 0 && t_hpf < 20) ? (
+  t_hpf = 20; 
+  slider_automate(t_hpf);
+);
+
+update_filters();
+
 cur_flux_int = to_int(t_flux);
 cur_thermal_int = to_int(t_thermal);
 cur_analog_int = to_int(t_analog);
@@ -175,7 +244,7 @@ gmem[24] = t_engine_mode;
 // DIRTY STATE CHECK
 (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
   t_flavor = 0; slider_automate(t_flavor);
-  topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; // Reset Mod vars
+  topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; 
 );
 
 // DETECT LINK TOGGLE
@@ -279,132 +348,69 @@ bc_val = gmem[bc_addr];
 
 last_link_state = t_link_on;
 
+// --- FILTER UPDATE CHECK (Real-time) ---
+(t_hpf != last_hpf || t_lpf != last_lpf || t_filters_on != last_filt_state) ? (
+  update_filters();
+  last_hpf = t_hpf;
+  last_lpf = t_lpf;
+  last_filt_state = t_filters_on;
+);
+
 // --- LINKING SYSTEM ---
 (t_link_on > 0) ? (
   l_base = 5000;
-  
-  // SELF-PUBLISH ACTIVE STATE
   t_topo == 0 ? gmem[l_base+0] = 1;
   t_topo == 1 ? gmem[l_base+1] = 1;
   t_topo == 2 ? gmem[l_base+2] = 1;
 
-  // Read Network State
   scope_ch_active = gmem[l_base+0];
   scope_bus_active = gmem[l_base+1];
   scope_mtr_active = gmem[l_base+2];
   
   my_bank = 1000 + (t_topo * 1000);
 
-  // SOFT TAKEOVER
   force_refresh ? (
     net_flux_mirror = gmem[my_bank];
     net_thermal_mirror = gmem[my_bank+1];
     net_analog_mirror = gmem[my_bank+2];
     net_trim_mirror = gmem[my_bank+3];
-    
     last_flux_int = to_int(t_flux);
     last_thermal_int = to_int(t_thermal);
     last_analog_int = to_int(t_analog);
     last_trim_int = to_int(t_out_gain);
-    
     force_refresh = 0;
   );
 
-  // 1. PROCESS NETWORK INCOMING
-  g_flux = gmem[my_bank];
-  g_thermal = gmem[my_bank+1];
-  g_analog = gmem[my_bank+2];
-  g_trim = gmem[my_bank+3];
+  g_flux = gmem[my_bank]; g_thermal = gmem[my_bank+1]; g_analog = gmem[my_bank+2]; g_trim = gmem[my_bank+3];
+  dn_flux = g_flux - net_flux_mirror; dn_thermal = g_thermal - net_thermal_mirror;
+  dn_analog = g_analog - net_analog_mirror; dn_trim = g_trim - net_trim_mirror;
   
-  dn_flux = g_flux - net_flux_mirror;
-  dn_thermal = g_thermal - net_thermal_mirror;
-  dn_analog = g_analog - net_analog_mirror;
-  dn_trim = g_trim - net_trim_mirror;
-  
-  (dn_flux != 0) ? (
-    t_flux = max(0, min(100, (to_int(t_flux) + dn_flux) / 10.0));
-    slider_automate(t_flux);
-    last_flux_int = to_int(t_flux); 
-    net_flux_mirror = g_flux;       
-    t_flavor = 0; slider_automate(t_flavor);
-  );
-  (dn_thermal != 0) ? (
-    t_thermal = max(0, min(100, (to_int(t_thermal) + dn_thermal) / 10.0));
-    slider_automate(t_thermal);
-    last_thermal_int = to_int(t_thermal);
-    net_thermal_mirror = g_thermal;
-    t_flavor = 0; slider_automate(t_flavor);
-  );
-  (dn_analog != 0) ? (
-    t_analog = max(0, min(100, (to_int(t_analog) + dn_analog) / 10.0));
-    slider_automate(t_analog);
-    last_analog_int = to_int(t_analog);
-    net_analog_mirror = g_analog;
-    t_flavor = 0; slider_automate(t_flavor);
-  );
-  (dn_trim != 0) ? (
-    t_out_gain += dn_trim; // FIX
-    slider_automate(t_out_gain);
-    target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
-    last_trim_int = to_int(t_out_gain);
-    net_trim_mirror = g_trim;
-  );
+  (dn_flux != 0) ? ( t_flux = max(0, min(100, (to_int(t_flux) + dn_flux) / 10.0)); slider_automate(t_flux); last_flux_int = to_int(t_flux); net_flux_mirror = g_flux; t_flavor = 0; slider_automate(t_flavor); );
+  (dn_thermal != 0) ? ( t_thermal = max(0, min(100, (to_int(t_thermal) + dn_thermal) / 10.0)); slider_automate(t_thermal); last_thermal_int = to_int(t_thermal); net_thermal_mirror = g_thermal; t_flavor = 0; slider_automate(t_flavor); );
+  (dn_analog != 0) ? ( t_analog = max(0, min(100, (to_int(t_analog) + dn_analog) / 10.0)); slider_automate(t_analog); last_analog_int = to_int(t_analog); net_analog_mirror = g_analog; t_flavor = 0; slider_automate(t_flavor); );
+  (dn_trim != 0) ? ( t_out_gain += dn_trim; slider_automate(t_out_gain); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); last_trim_int = to_int(t_out_gain); net_trim_mirror = g_trim; );
 
-  // 2. PROCESS PRESET SYNC
   net_flavor = gmem[my_bank + 4];
   (net_flavor != 0 && net_flavor != my_flavor_cmd) ? (
     new_flav = (net_flavor == -1) ? 0 : net_flavor;
     t_flavor = new_flav; slider_automate(t_flavor);
-    new_flav > 0 ? ( 
-      load_flavor(new_flav); 
-      last_flux_int = to_int(t_flux); last_thermal_int = to_int(t_thermal); last_analog_int = to_int(t_analog);
-    );
+    new_flav > 0 ? ( load_flavor(new_flav); last_flux_int = to_int(t_flux); last_thermal_int = to_int(t_thermal); last_analog_int = to_int(t_analog); );
     my_flavor_cmd = net_flavor;
   );
 
-  // 3. PROCESS USER OUTGOING
-  cur_flux_int = to_int(t_flux);
-  cur_thermal_int = to_int(t_thermal);
-  cur_analog_int = to_int(t_analog);
-  
-  du_flux = cur_flux_int - last_flux_int;
-  du_thermal = cur_thermal_int - last_thermal_int;
-  du_analog = cur_analog_int - last_analog_int;
+  cur_flux_int = to_int(t_flux); cur_thermal_int = to_int(t_thermal); cur_analog_int = to_int(t_analog);
+  du_flux = cur_flux_int - last_flux_int; du_thermal = cur_thermal_int - last_thermal_int; du_analog = cur_analog_int - last_analog_int;
   
   (du_flux != 0 || du_thermal != 0 || du_analog != 0) ? (
     (t_flavor != 0) ? (
       t_flavor = 0; slider_automate(t_flavor);
-      scope_ch_active ? gmem[1000 + 4] = -1;
-      scope_bus_active ? gmem[2000 + 4] = -1;
-      scope_mtr_active ? gmem[3000 + 4] = -1;
+      scope_ch_active ? gmem[1000 + 4] = -1; scope_bus_active ? gmem[2000 + 4] = -1; scope_mtr_active ? gmem[3000 + 4] = -1;
     );
-
-    scope_ch_active ? (
-      base = 1000;
-      du_flux != 0 ? atomic_add(gmem[base+0], du_flux);
-      du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal);
-      du_analog != 0 ? atomic_add(gmem[base+2], du_analog);
-    );
-    scope_bus_active ? (
-      base = 2000;
-      du_flux != 0 ? atomic_add(gmem[base+0], du_flux);
-      du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal);
-      du_analog != 0 ? atomic_add(gmem[base+2], du_analog);
-    );
-    scope_mtr_active ? (
-      base = 3000;
-      du_flux != 0 ? atomic_add(gmem[base+0], du_flux);
-      du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal);
-      du_analog != 0 ? atomic_add(gmem[base+2], du_analog);
-    );
-    
-    net_flux_mirror += du_flux;
-    net_thermal_mirror += du_thermal;
-    net_analog_mirror += du_analog;
-    
-    last_flux_int = cur_flux_int;
-    last_thermal_int = cur_thermal_int;
-    last_analog_int = cur_analog_int;
+    scope_ch_active ? ( base = 1000; du_flux != 0 ? atomic_add(gmem[base+0], du_flux); du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal); du_analog != 0 ? atomic_add(gmem[base+2], du_analog); );
+    scope_bus_active ? ( base = 2000; du_flux != 0 ? atomic_add(gmem[base+0], du_flux); du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal); du_analog != 0 ? atomic_add(gmem[base+2], du_analog); );
+    scope_mtr_active ? ( base = 3000; du_flux != 0 ? atomic_add(gmem[base+0], du_flux); du_thermal != 0 ? atomic_add(gmem[base+1], du_thermal); du_analog != 0 ? atomic_add(gmem[base+2], du_analog); );
+    net_flux_mirror += du_flux; net_thermal_mirror += du_thermal; net_analog_mirror += du_analog;
+    last_flux_int = cur_flux_int; last_thermal_int = cur_thermal_int; last_analog_int = cur_analog_int;
   );
   
   (t_flavor != last_flavor && t_flavor > 0) ? (
@@ -416,76 +422,35 @@ last_link_state = t_link_on;
   (t_flavor != last_flavor) ? last_flavor = t_flavor;
 
 ) : (
-  last_flux_int = to_int(t_flux); 
-  last_thermal_int = to_int(t_thermal); 
-  last_analog_int = to_int(t_analog); 
-  last_trim_int = to_int(t_out_gain);
-  last_flavor = t_flavor;
-  
-  // Ensure we stop publishing if link is off
-  t_topo == 0 ? gmem[5000+0] = 0;
-  t_topo == 1 ? gmem[5000+1] = 0;
-  t_topo == 2 ? gmem[5000+2] = 0;
+  last_flux_int = to_int(t_flux); last_thermal_int = to_int(t_thermal); last_analog_int = to_int(t_analog); last_trim_int = to_int(t_out_gain); last_flavor = t_flavor;
+  t_topo == 0 ? gmem[5000+0] = 0; t_topo == 1 ? gmem[5000+1] = 0; t_topo == 2 ? gmem[5000+2] = 0;
 );
 
 // ... (Physics & Audio) ...
-t_topo == 2 ? (
-  gmem[30] = instance_id; 
-  gmem[31] += 1; 
-  has_master = 1;
-  gmem[23] = t_xt_mode; 
-) : (
-  gmem[30] == instance_id ? gmem[30] = 0; 
-);
-
+t_topo == 2 ? ( gmem[30] = instance_id; gmem[31] += 1; has_master = 1; gmem[23] = t_xt_mode; ) : ( gmem[30] == instance_id ? gmem[30] = 0; );
 block_duration = samplesblock * inv_srate;
-gmem[31] != last_h_tick ? (
-  has_master = 1; last_h_tick = gmem[31]; m_watchdog_time = 0;
-) : (
-  m_watchdog_time += block_duration;
-  m_watchdog_time > 0.5 ? has_master = 0; 
-);
-
-t_topo == 2 && gmem[30] != instance_id ? (
-  t_topo = 1; slider_automate(t_topo);
-  topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0;
-  target_calib = 10^((t_drive + topo_offset) / 20);
-  target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
-);
+gmem[31] != last_h_tick ? ( has_master = 1; last_h_tick = gmem[31]; m_watchdog_time = 0; ) : ( m_watchdog_time += block_duration; m_watchdog_time > 0.5 ? has_master = 0; );
+t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); );
 
 gmem[7] != last_global_bypass ? ( t_bypass = gmem[7]; last_global_bypass = gmem[7]; slider_automate(t_bypass); );
 gmem[21] != last_global_xtalk ? ( t_xtalk = gmem[21]; last_global_xtalk = t_xtalk; slider_automate(t_xtalk); );
-gmem[23] != last_global_xt_mode ? (
-  t_topo != 2 ? ( t_xt_mode = gmem[23]; slider_automate(t_xt_mode); );
-  last_global_xt_mode = gmem[23];
-);
-// SYNC ENGINE GLOBAL IN
-gmem[24] != last_global_engine ? ( 
-  t_engine_mode = gmem[24]; 
-  last_global_engine = t_engine_mode; 
-  slider_automate(t_engine_mode); 
-);
+gmem[23] != last_global_xt_mode ? ( t_topo != 2 ? ( t_xt_mode = gmem[23]; slider_automate(t_xt_mode); ); last_global_xt_mode = gmem[23]; );
+gmem[24] != last_global_engine ? ( t_engine_mode = gmem[24]; last_global_engine = t_engine_mode; slider_automate(t_engine_mode); );
 
 target_xt_db = (t_xt_mode == 0) ? -75.0 : (t_xt_mode == 1) ? -95.0 : -115.0;
 xt_gain = 10^(target_xt_db/20);
 
 gmem[22] != last_global_calib ? ( 
   t_calib_mode = gmem[22]; last_global_calib = t_calib_mode; slider_automate(t_calib_mode); 
-  t_topo == 1 ? topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0;
-  t_topo == 2 ? topo_offset = -8.0;
-  t_topo == 0 ? topo_offset = 0.0;
-  target_calib = 10^((t_drive + topo_offset) / 20);
-  target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
+  t_topo == 1 ? topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; t_topo == 2 ? topo_offset = -8.0; t_topo == 0 ? topo_offset = 0.0;
+  target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
 );
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
-topology_interstage = t_topo == 0 ? 1.0 : 0.85; 
-topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
+topology_interstage = t_topo == 0 ? 1.0 : 0.85; topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
 
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
-energy_accum = 0;
-t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); );
-rail_target = gmem[10];
+energy_accum = 0; t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); ); rail_target = gmem[10];
 
 @sample
 rawL = spl0; rawR = spl1;
@@ -497,15 +462,33 @@ s_out = s_out * smooth + target_out * (1 - smooth);
 s_bypass = s_bypass * smooth + target_bypass * (1 - smooth);
 
 sL = rawL * s_calib; sR = rawR * s_calib;
+
+// --- CONSOLE FILTERS INSERT POINT (Optimized) ---
+(t_filters_on) ? (
+  // Only process if freq is "valid" (>= 20)
+  (t_hpf >= 20) ? (
+    hp_L = (h_a0 * sL) + (h_a1 * hpf_x1L) + (h_a2 * hpf_x2L) - (h_b1 * hpf_y1L) - (h_b2 * hpf_y2L);
+    hpf_x2L = hpf_x1L; hpf_x1L = sL; hpf_y2L = hpf_y1L; hpf_y1L = hp_L; sL = hp_L;
+    hp_R = (h_a0 * sR) + (h_a1 * hpf_x1R) + (h_a2 * hpf_x2R) - (h_b1 * hpf_y1R) - (h_b2 * hpf_y2R);
+    hpf_x2R = hpf_x1R; hpf_x1R = sR; hpf_y2R = hpf_y1R; hpf_y1R = hp_R; sR = hp_R;
+  );
+  // Only process if freq is "valid" (< 20000)
+  (t_lpf < 20000) ? (
+    lp_L = (l_a0 * sL) + (l_a1 * lpf_x1L) + (l_a2 * lpf_x2L) - (l_b1 * lpf_y1L) - (l_b2 * lpf_y2L);
+    lpf_x2L = lpf_x1L; lpf_x1L = sL; lpf_y2L = lpf_y1L; lpf_y1L = lp_L; sL = lp_L;
+    lp_R = (l_a0 * sR) + (l_a1 * lpf_x1R) + (l_a2 * lpf_x2R) - (l_b1 * lpf_y1R) - (l_b2 * lpf_y2R);
+    lpf_x2R = lpf_x1R; lpf_x1R = sR; lpf_y2R = lpf_y1R; lpf_y1R = lp_R; sR = lp_R;
+  );
+);
+// --- END FILTERS ---
+
 dryL = sL; dryR = sR; 
 peak = max(abs(sL), abs(sR));
 meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_input * 0.9992 + peak * 0.0008);
 
 g_clock += 1;
 t_topo == 2 && (g_clock > 128) ? ( 
-  g_clock = 0;
-  current_read = gmem[PTR_BANK]; // 0 or 1
-  next_read = 1 - current_read; 
+  g_clock = 0; current_read = gmem[PTR_BANK]; next_read = 1 - current_read; 
   xi = 0; loop(10, gmem[BANK_A_OFFSET + xi + (next_read * 100)] = 0; xi += 1; );
   gmem[PTR_BANK] = next_read;
 );
@@ -513,41 +496,20 @@ t_topo == 2 && (g_clock > 128) ? (
 xt_leak = 0;
 
 (t_bypass == 0) ? (
-  
   t_xtalk ? (
-    read_bank_offset = gmem[PTR_BANK] * 100;      
-    write_bank_offset = (1 - gmem[PTR_BANK]) * 100; 
-    
-    xt_mono = (sL + sR) * 0.5;
-    xt_lp = xt_lp * 0.85 + xt_mono * 0.15;
-    xt_hp = xt_hp * 0.98 + xt_lp * 0.02;
-    xt_final = xt_lp - xt_hp;
-    
+    read_bank_offset = gmem[PTR_BANK] * 100; write_bank_offset = (1 - gmem[PTR_BANK]) * 100; 
+    xt_mono = (sL + sR) * 0.5; xt_lp = xt_lp * 0.85 + xt_mono * 0.15; xt_hp = xt_hp * 0.98 + xt_lp * 0.02; xt_final = xt_lp - xt_hp;
     atomic_add(gmem[BANK_A_OFFSET + cluster_id + write_bank_offset], xt_final);
-    xt_sum = gmem[BANK_A_OFFSET + cluster_id + read_bank_offset];
-    xt_leak = (xt_sum - xt_final) * xt_gain;
-    
-    sL += xt_leak * s_bypass; 
-    sR += xt_leak * s_bypass;
+    xt_sum = gmem[BANK_A_OFFSET + cluster_id + read_bank_offset]; xt_leak = (xt_sum - xt_final) * xt_gain;
+    sL += xt_leak * s_bypass; sR += xt_leak * s_bypass;
   );
   
-  // --- HYBRID SWITCH POINT ---
   (t_engine_mode == 1 && t_flavor > 0) ? (
-      // === ENGINE B: IRON MOD ===
-      (topo_core > 0) ? (
-         drive_core = 1.0 + (s_thermal * 0.05); 
-         sL = sL * drive_core; sR = sR * drive_core;
-      );
-      sL += topo_bias; sR += topo_bias;
-      user_sat = 1.0 + (s_analog * 0.03); 
-      total_drive = topo_drive_push * user_sat;
+      (topo_core > 0) ? ( drive_core = 1.0 + (s_thermal * 0.05); sL = sL * drive_core; sR = sR * drive_core; );
+      sL += topo_bias; sR += topo_bias; user_sat = 1.0 + (s_analog * 0.03); total_drive = topo_drive_push * user_sat;
       sL = tanh(sL * total_drive); sR = tanh(sR * total_drive);
-      sL -= (topo_bias * 0.95); sR -= (topo_bias * 0.95);
-      sL *= 1.05; sR *= 1.05;
+      sL -= (topo_bias * 0.95); sR -= (topo_bias * 0.95); sL *= 1.05; sR *= 1.05;
   );
-  // IF t_engine_mode == 0, we simply skip this block and signal flows 
-  // directly to the original flux/interstage code below.
-  // ---------------------------
 
   flux_freq = 16500 - (unit_seed * (6500 * topology_flux_depth)); 
   flux_coeff = (1 - s_flux * 0.12) * (flux_freq * inv_srate);
@@ -563,298 +525,229 @@ xt_leak = 0;
     istL_A1 = (istL_A1 * (1 - firstStage)) + (inL * firstStage); inL = istL_A1;
     istL_A2 = (istL_A2 * (1 - iirAmount)) + (inL * iirAmount); inL = istL_A2;
     istL_A3 = (istL_A3 * (1 - iirAmount)) + (inL * iirAmount); inputL = istL_A3;
-    sL = dryL - (inputL * s_analog);
-    (sL - istL_A1 > slew_t) ? sL = istL_A1 + slew_t : (sL - istL_A1 < -slew_t) ? sL = istL_A1 - slew_t;
+    sL = dryL - (inputL * s_analog); (sL - istL_A1 > slew_t) ? sL = istL_A1 + slew_t : (sL - istL_A1 < -slew_t) ? sL = istL_A1 - slew_t;
     istR_A1 = (istR_A1 * (1 - firstStage)) + (inR * firstStage); inR = istR_A1;
     istR_A2 = (istR_A2 * (1 - iirAmount)) + (inR * iirAmount); inR = istR_A2;
     istR_A3 = (istR_A3 * (1 - iirAmount)) + (inR * iirAmount); inputR = istR_A3;
-    sR = dryR - (inputR * s_analog);
-    (sR - istR_A1 > slew_t) ? sR = istR_A1 + slew_t : (sR - istR_A1 < -slew_t) ? sR = istR_A1 - slew_t;
+    sR = dryR - (inputR * s_analog); (sR - istR_A1 > slew_t) ? sR = istR_A1 + slew_t : (sR - istR_A1 < -slew_t) ? sR = istR_A1 - slew_t;
   ) : (
     istL_B1 = (istL_B1 * (1 - firstStage)) + (inL * firstStage); inL = istL_B1;
     istL_B2 = (istL_B2 * (1 - iirAmount)) + (inL * iirAmount); inL = istL_B2;
     istL_B3 = (istL_B3 * (1 - iirAmount)) + (inL * iirAmount); inputL = istL_B3;
-    sL = dryL - (inputL * s_analog);
-    (sL - istL_B1 > slew_t) ? sL = istL_B1 + slew_t : (sL - istL_B1 < -slew_t) ? sL = istL_B1 - slew_t;
+    sL = dryL - (inputL * s_analog); (sL - istL_B1 > slew_t) ? sL = istL_B1 + slew_t : (sL - istL_B1 < -slew_t) ? sL = istL_B1 - slew_t;
     istR_B1 = (istR_B1 * (1 - firstStage)) + (inR * firstStage); inR = istR_B1;
     istR_B2 = (istR_B2 * (1 - iirAmount)) + (inR * iirAmount); inR = istR_B2;
     istR_B3 = (istR_B3 * (1 - iirAmount)) + (inR * iirAmount); inputR = istR_B3;
-    sR = dryR - (inputR * s_analog);
-    (sR - istR_B1 > slew_t) ? sR = istR_B1 + slew_t : (sR - istR_B1 < -slew_t) ? sR = istR_B1 - slew_t;
+    sR = dryR - (inputR * s_analog); (sR - istR_B1 > slew_t) ? sR = istR_B1 + slew_t : (sR - istR_B1 < -slew_t) ? sR = istR_B1 - slew_t;
   );
   flip = 1 - flip; lastL = sL; lastR = sR;
 
   absL = abs(sL); absR = abs(sR);
   heatL = (absL > heatL) ? (absL * 0.05 + heatL * 0.95) : (heatL * thermal_rel + absL * (1 - thermal_rel));
   heatR = (absR > heatR) ? (absR * 0.05 + heatR * 0.95) : (heatR * thermal_rel + absR * (1 - thermal_rel));
-  bloomL = 1.0 + (heatL * s_thermal * (t_topo == 0 ? 0.5 : 0.6));
-  bloomR = 1.0 + (heatR * s_thermal * (t_topo == 0 ? 0.5 : 0.6));
-  sL *= 0.618; sL_target = 1.0 - min(abs(sL), 0.999); 
-  (sL > 0.0) ? sL = -(exp(log(sL_target) * (1.618 * bloomL)) - 1) : sL = exp(log(1 + sL) * (1.618 * bloomL)) - 1;
-  sR *= 0.618; sR_target = 1.0 - min(abs(sR), 0.999); 
-  (sR > 0.0) ? sR = -(exp(log(sR_target) * (1.618 * bloomR)) - 1) : sR = exp(log(1 + sR) * (1.618 * bloomR)) - 1;
-  
-  current_energy = (abs(sL) + abs(sR)) * 0.5;
-  energy_accum += current_energy;
-
+  bloomL = 1.0 + (heatL * s_thermal * (t_topo == 0 ? 0.5 : 0.6)); bloomR = 1.0 + (heatR * s_thermal * (t_topo == 0 ? 0.5 : 0.6));
+  sL *= 0.618; sL_target = 1.0 - min(abs(sL), 0.999); (sL > 0.0) ? sL = -(exp(log(sL_target) * (1.618 * bloomL)) - 1) : sL = exp(log(1 + sL) * (1.618 * bloomL)) - 1;
+  sR *= 0.618; sR_target = 1.0 - min(abs(sR), 0.999); (sR > 0.0) ? sR = -(exp(log(sR_target) * (1.618 * bloomR)) - 1) : sR = exp(log(1 + sR) * (1.618 * bloomR)) - 1;
+  current_energy = (abs(sL) + abs(sR)) * 0.5; energy_accum += current_energy;
 ) : (
-  // --- STATE SCRUBBER PATH (Smart Decay & Snap) ---
-  xt_lp *= 0.5; xt_hp *= 0.5;
-  apL *= 0.5; apR *= 0.5;
-  istL_A1 *= 0.5; istL_B1 *= 0.5; istL_A2 *= 0.5; istL_B2 *= 0.5;
-  istR_A1 *= 0.5; istR_B1 *= 0.5; istR_A2 *= 0.5; istR_B2 *= 0.5;
+  xt_lp *= 0.5; xt_hp *= 0.5; apL *= 0.5; apR *= 0.5;
+  istL_A1 *= 0.5; istL_B1 *= 0.5; istL_A2 *= 0.5; istL_B2 *= 0.5; istR_A1 *= 0.5; istR_B1 *= 0.5; istR_A2 *= 0.5; istR_B2 *= 0.5;
   heatL *= 0.5; heatR *= 0.5;
-
-  (abs(xt_lp) < 0.000000001) ? xt_lp = 0;
-  (abs(xt_hp) < 0.000000001) ? xt_hp = 0;
-  (abs(heatL) < 0.000000001) ? heatL = 0;
-  (abs(heatR) < 0.000000001) ? heatR = 0;
-  
-  // FIX v1.8.1: FORCE INTERNAL SILENCE
+  (abs(xt_lp) < 0.000000001) ? xt_lp = 0; (abs(xt_hp) < 0.000000001) ? xt_hp = 0;
+  (abs(heatL) < 0.000000001) ? heatL = 0; (abs(heatR) < 0.000000001) ? heatR = 0;
   sL = 0; sR = 0;
 );
 
 procL = sL * s_out; procR = sR * s_out;
 hpL = hpL * 0.9999 + procL * 0.0001; hpR = hpR * 0.9999 + procR * 0.0001;
 procL -= hpL; procR -= hpR;
-
-spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass));
-spl1 = (procR * s_bypass) + (rawR * (1 - s_bypass));
+spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) + (rawR * (1 - s_bypass));
 
 @gfx 550 420
-gfx_clear = 28 + 28*256 + 30*65536; 
 
-function draw_meter(val, x, y, w, h, label, color_mode) (
-  gfx_set(0.1, 0.1, 0.12, 1); gfx_rect(x, y, w, h); 
-  v = min(val, 1.0);
-  color_mode == 0 ? gfx_set(0, 0.7, 1, 1) : gfx_set(1, 0.5, 0, 1); 
-  gfx_rect(x, y, v*w, h); 
-  color_mode == 0 ? ( gfx_set(1, 1, 1, 0.8); gfx_rect(x + w * 0.8 - 1, y - 4, 2, h + 8); );
-  gfx_set(1, 1, 1, 0.4); gfx_setfont(1, "Arial", 12);
-  gfx_x = x; gfx_y = y - 18; gfx_drawstr(label);
-);
-
-function draw_button(x, y, w, h, active, label, r, g, b) (
-  active == 2 ? gfx_set(r, g, b, 1) : gfx_set(0.15, 0.15, 0.18, 1);
-  gfx_rect(x, y, w, h); 
-  gfx_set(1, 1, 1, 0.05); gfx_line(x, y, x+w, y); 
-  active == 1 ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
-  gfx_set(1, 1, 1, active == 1 ? 1 : 0.4);
-  gfx_setfont(1, "Arial", h > 25 ? 18 : 11, 'b');
-  gfx_measurestr(label, lw, lh);
-  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
-  gfx_drawstr(label);
-);
-
-function draw_small_button(x, y, w, h, active, label) (
-  active ? gfx_set(0.4, 0.8, 0.4, 1) : gfx_set(0.2, 0.2, 0.25, 1);
-  gfx_rect(x, y, w, h);
-  gfx_set(1, 1, 1, 0.8);
-  gfx_setfont(1, "Arial", 11);
-  gfx_measurestr(label, lw, lh);
-  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
-  gfx_drawstr(label);
-);
-
-// SPECIAL UI: ORANGE/BLACK SCOPE BUTTONS
-function draw_scope_button(x, y, w, h, active, label) (
-  active ? gfx_set(0.9, 0.5, 0.1, 1) : gfx_set(0.2, 0.2, 0.25, 1); // Orange vs Dark
-  gfx_rect(x, y, w, h);
-  active ? gfx_set(0, 0, 0, 1) : gfx_set(1, 1, 1, 0.8); // Black text vs White
-  gfx_setfont(1, "Arial", 18, 'b'); // CHANGED TO 18
-  gfx_measurestr(label, lw, lh);
-  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
-  gfx_drawstr(label);
-);
-
-// TRIM BUTTON (Bold 14)
-function draw_trim_button(x, y, w, h, active, label) (
-  active ? gfx_set(0.4, 0.8, 0.4, 1) : gfx_set(0.2, 0.2, 0.25, 1);
-  gfx_rect(x, y, w, h);
-  gfx_set(1, 1, 1, 0.8);
-  gfx_setfont(1, "Arial", 14, 'b'); // CHANGED TO 14 BOLD
-  gfx_measurestr(label, lw, lh);
-  gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2;
-  gfx_drawstr(label);
-);
-
-gfx_set(1, 1, 1, 0.1); gfx_x = 10; gfx_y = 15; gfx_setfont(1, "Arial", 32, 'b');
-gfx_drawstr("THE ANALOG MOLECULE");
-
-draw_meter(min(meter_input * 6.5, 1), 50, 75, 450, 12, "CIRCUIT DRIVE STRENGTH", 0);
-
-r_col = t_bypass == 1 ? 1 : 0;
-g_col = t_bypass == 1 ? 0.2 : 1;
-b_col = t_bypass == 1 ? 0.2 : 0.5;
-draw_button(50, 120, 450, 35, 1, t_bypass == 0 ? "MOLECULAR NETWORK: ACTIVE" : "GLOBAL BYPASS ENGAGED", r_col, g_col, b_col);
-(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 120 && mouse_y <= 155) ? ( t_bypass = 1 - t_bypass; gmem[7] = t_bypass; slider_automate(t_bypass); );
-
-is_xt_visually_active = (t_xtalk == 1 && t_bypass == 0);
-draw_button(50, 170, 450, 35, is_xt_visually_active, t_xtalk == 1 ? "ANALOG CROSSTALK: ON" : "ANALOG CROSSTALK: OFF", 0.8, 0.4, 1);
-(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 170 && mouse_y <= 205) ? ( t_xtalk = 1 - t_xtalk; gmem[21] = t_xtalk; slider_automate(t_xtalk); );
-
-// XT Mode Row (Y=207)
-t_topo == 2 ? (
-  mode_name = (t_xt_mode == 0) ? "XT MODE: VINTAGE" : (t_xt_mode == 1) ? "XT MODE: MODERN" : "XT MODE: BOUTIQUE";
-  xt_mode_state = (t_xtalk == 1 && t_bypass == 0) ? 2 : 0;
-  draw_button(50, 207, 220, 20, xt_mode_state, mode_name, 0.2, 0.35, 0.7);
-  (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= 207 && mouse_y <= 227) ? ( 
-    t_xt_mode = (t_xt_mode + 1) % 3; 
-    slider_automate(t_xt_mode);
-    gmem[23] = t_xt_mode; 
+  function draw_meter(val, x, y, w, h, label, color_mode) (
+    gfx_set(0.1, 0.1, 0.12, 1); gfx_rect(x, y, w, h); 
+    v = min(val, 1.0); color_mode == 0 ? gfx_set(0, 0.7, 1, 1) : gfx_set(1, 0.5, 0, 1); gfx_rect(x, y, v*w, h); 
+    color_mode == 0 ? ( gfx_set(1, 1, 1, 0.8); gfx_rect(x + w * 0.8 - 1, y - 4, 2, h + 8); );
+    gfx_set(1, 1, 1, 0.4); gfx_setfont(1, "Arial", 12); gfx_x = x; gfx_y = y - 18; gfx_drawstr(label);
   );
-) : (
-  gfx_set(1, 1, 1, 0.3); gfx_setfont(1, "Arial", 11);
-  slave_mode = (t_xt_mode == 0) ? "VINTAGE" : (t_xt_mode == 1) ? "MODERN" : "BOUTIQUE";
-  info_s = sprintf(#, "XT SYNC: %s", slave_mode);
-  gfx_measurestr(info_s, iw, ih);
-  gfx_x = 50; gfx_y = 210;
-  gfx_drawstr(info_s);
-);
-
-// --- NEW HYBRID ENGINE SWITCH (Right side of XT row) ---
-// Global Engine Button
-eng_name = (t_engine_mode == 0) ? "ENGINE: ORIGINAL v2.0" : "ENGINE: IRON MOD";
-// Green if Original, Red/Orange if Mod
-eng_r = (t_engine_mode == 0) ? 0.2 : 0.8;
-eng_g = (t_engine_mode == 0) ? 0.6 : 0.2;
-eng_b = 0.2;
-
-draw_button(280, 207, 220, 20, 1, eng_name, eng_r, eng_g, eng_b);
-(mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= 207 && mouse_y <= 227) ? (
-  t_engine_mode = 1 - t_engine_mode;
-  slider_automate(t_engine_mode);
-  gmem[24] = t_engine_mode; // PUSH TO GLOBAL INSTANTLY
-);
-
-// REGEN/SHUFFLE moved down slightly to Y=240
-r_y = 240;
-draw_button(50, r_y, 220, 35, 0, "REGEN ID (LOCAL)", 0, 0, 0);
-(mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
-  t_id = floor(rand(180)) + 1; 
-  slider_automate(t_id); 
-  unit_seed = t_id / 180; 
-  cluster_id = floor((t_id - 1) / 18); 
-);
-
-draw_button(280, r_y, 220, 35, 0, "RESHUFFLE ALL IDs", 0.2, 0, 0);
-(mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
-  gmem[11] = floor(rand(1000)); 
-  gmem[1] = 0; 
-  gmem[0] += 1; 
-);
-
-has_master == 0 ? (
-  gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 13, 'b');
-  warn_s = "WARNING: NO MASTER DETECTED (NETWORK SAG INACTIVE)";
-  gfx_measurestr(warn_s, ww, wh);
-  gfx_x = 50 + (450 - ww)/2; gfx_y = 285;
-  gfx_drawstr(warn_s);
-);
-
-id_conflict == 1 ? (
-  gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b');
-  warn_text = "ID DUPLICATE!";
-  gfx_measurestr(warn_text, dw, dh);
-  gfx_x = 500 - dw; gfx_y = 315; 
-  gfx_drawstr(warn_text);
-);
-
-gfx_set(1, 1, 1, 0.05); gfx_rect(50, 305, 450, 1);
-gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
-topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
-cal_str = (t_topo == 1) ? (t_calib_mode == 0 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
-status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal_str, cluster_id + 1);
-gfx_measurestr(status_str, sw, sh);
-gfx_x = 50 + (450 - sw)/2; gfx_y = 315;
-gfx_drawstr(status_str);
-
-// --- WARNING UI: WINDOW TOO SMALL ---
-(gfx_h < 415) ? (
-  gfx_set(1, 0.3, 0.3, 1);
-  gfx_setfont(1, "Arial", 11, 'b');
-  txt = "UI HIDDEN: EXPAND WINDOW ▼";
-  gfx_measurestr(txt, w, h);
-  gfx_x = gfx_w - w - 10;
-  gfx_y = 15;
-  gfx_drawstr(txt);
-);
-
-// --- BOTTOM TOOLBAR (NEW UI) ---
-bar_y = 340;
-gfx_set(0.1, 0.1, 0.12, 1); gfx_rect(0, bar_y, 550, 80); // Dark BG
-gfx_set(1, 1, 1, 0.1); gfx_line(0, bar_y, 550, bar_y);
-
-// 1. LINK CONTROL (LEFT)
-draw_button(30, bar_y + 15, 100, 50, t_link_on, t_link_on ? "LINK: ON" : "LINK: OFF", 0, 0.6, 0.2);
-(mouse_cap & 1 && !last_cap && mouse_x >= 30 && mouse_x <= 130 && mouse_y >= bar_y + 15 && mouse_y <= bar_y + 65) ? (
-  t_link_on = 1 - t_link_on; slider_automate(t_link_on);
-);
-
-// 2. SCOPE & TRIM (CENTER)
-// Only visible if Link is ON
-t_link_on ? (
-  l_base = 5000;
-  // Read Self-Published states
-  st_ch = gmem[l_base+0]; st_bus = gmem[l_base+1]; st_mtr = gmem[l_base+2];
-  
-  // Scopes Row
-  draw_scope_button(160, bar_y + 15, 40, 20, st_ch, "CH");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 200 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( 
-    gmem[l_base+0] = 1 - gmem[l_base+0]; gmem[70] = (gmem[l_base+0] == 1); 
+  function draw_button(x, y, w, h, active, label, r, g, b) (
+    active == 2 ? gfx_set(r, g, b, 1) : gfx_set(0.15, 0.15, 0.18, 1); gfx_rect(x, y, w, h); gfx_set(1, 1, 1, 0.05); gfx_line(x, y, x+w, y); 
+    active == 1 ? ( gfx_set(r, g, b, 0.2); gfx_rect(x, y, w, h); gfx_set(r, g, b, 1); gfx_rect(x, y, 4, h); );
+    gfx_set(1, 1, 1, active == 1 ? 1 : 0.4); gfx_setfont(1, "Arial", h > 25 ? 18 : 11, 'b');
+    gfx_measurestr(label, lw, lh); gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2; gfx_drawstr(label);
   );
-  
-  draw_scope_button(210, bar_y + 15, 40, 20, st_bus, "BUS");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 210 && mouse_x <= 250 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( 
-    gmem[l_base+1] = 1 - gmem[l_base+1]; gmem[71] = (gmem[l_base+1] == 1);
+  function draw_small_button(x, y, w, h, active, label) (
+    active ? gfx_set(0.4, 0.8, 0.4, 1) : gfx_set(0.2, 0.2, 0.25, 1); gfx_rect(x, y, w, h); gfx_set(1, 1, 1, 0.8);
+    gfx_setfont(1, "Arial", 11); gfx_measurestr(label, lw, lh); gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2; gfx_drawstr(label);
   );
-  
-  draw_scope_button(260, bar_y + 15, 40, 20, st_mtr, "MTR");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 260 && mouse_x <= 300 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( 
-    gmem[l_base+2] = 1 - gmem[l_base+2]; gmem[72] = (gmem[l_base+2] == 1);
+  function draw_scope_button(x, y, w, h, active, label) (
+    active ? gfx_set(0.9, 0.5, 0.1, 1) : gfx_set(0.2, 0.2, 0.25, 1); gfx_rect(x, y, w, h);
+    active ? gfx_set(0, 0, 0, 1) : gfx_set(1, 1, 1, 0.8); gfx_setfont(1, "Arial", 18, 'b'); 
+    gfx_measurestr(label, lw, lh); gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2; gfx_drawstr(label);
   );
-  
-  // Trim Row
-  draw_trim_button(160, bar_y + 45, 65, 20, 0, "< TRIM");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 225 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? (
-    st_ch ? atomic_add(gmem[1000 + 3], -0.025);
-    st_bus ? atomic_add(gmem[2000 + 3], -0.025);
-    st_mtr ? atomic_add(gmem[3000 + 3], -0.025);
+  function draw_trim_button(x, y, w, h, active, label) (
+    active ? gfx_set(0.4, 0.8, 0.4, 1) : gfx_set(0.2, 0.2, 0.25, 1); gfx_rect(x, y, w, h); gfx_set(1, 1, 1, 0.8);
+    gfx_setfont(1, "Arial", 14, 'b'); gfx_measurestr(label, lw, lh); gfx_x = x + (w - lw)/2; gfx_y = y + (h - lh)/2; gfx_drawstr(label);
   );
-  
-  draw_trim_button(235, bar_y + 45, 65, 20, 0, "TRIM >");
-  (mouse_cap & 1 && !last_cap && mouse_x >= 235 && mouse_x <= 300 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? (
-    st_ch ? atomic_add(gmem[1000 + 3], 0.025);
-    st_bus ? atomic_add(gmem[2000 + 3], 0.025);
-    st_mtr ? atomic_add(gmem[3000 + 3], 0.025);
+  function draw_btn_label(label, bx, bw, by) (
+      gfx_measurestr(label, lw, lh); gfx_x = bx + (bw - lw)*0.5; gfx_y = by + 2; gfx_drawstr(label);
   );
-);
+  function handle_hpf_menu(target_slider) (
+      gfx_x = mouse_x; gfx_y = mouse_y;
+      selection = gfx_showmenu("20|30|40|50|60|70|80|90|100|120|150|200|250|300");
+      selection > 0 ? (
+          selection == 1 ? val = 20 : selection == 2 ? val = 30 : selection == 3 ? val = 40 : selection == 4 ? val = 50 : selection == 5 ? val = 60 : selection == 6 ? val = 70 :
+          selection == 7 ? val = 80 : selection == 8 ? val = 90 : selection == 9 ? val = 100 : selection == 10 ? val = 120 : selection == 11 ? val = 150 : selection == 12 ? val = 200 :
+          selection == 13 ? val = 250 : selection == 14 ? val = 300;
+          target_slider == 30 ? slider30 = val : target_slider == 31 ? slider31 = val : target_slider == 32 ? slider32 = val : target_slider == 33 ? slider33 = val : target_slider == 34 ? slider34 = val;
+      );
+  );
+  function handle_lpf_menu(target_slider) (
+      gfx_x = mouse_x; gfx_y = mouse_y;
+      selection = gfx_showmenu("3k|4k|5k|6k|7k|8k|9k|10k|11k|12k|13k|14k|15k|16k|18k|20k");
+      selection > 0 ? (
+          selection == 1 ? val = 3000 : selection == 2 ? val = 4000 : selection == 3 ? val = 5000 : selection == 4 ? val = 6000 : selection == 5 ? val = 7000 : selection == 6 ? val = 8000 :
+          selection == 7 ? val = 9000 : selection == 8 ? val = 10000 : selection == 9 ? val = 11000 : selection == 10 ? val = 12000 : selection == 11 ? val = 13000 : selection == 12 ? val = 14000 :
+          selection == 13 ? val = 15000 : selection == 14 ? val = 16000 : selection == 15 ? val = 18000 : selection == 16 ? val = 20000;
+          target_slider == 35 ? slider35 = val : target_slider == 36 ? slider36 = val : target_slider == 37 ? slider37 = val : target_slider == 38 ? slider38 = val : target_slider == 39 ? slider39 = val;
+      );
+  );
 
-// 3. FLAVOR / PRESET (RIGHT)
-flav_name = (t_flavor == 0) ? "CUSTOM" : (t_flavor == 1) ? "BRITISH A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : "MODERN";
+  is_embedded = (gfx_ext_flags != 0);
 
-// Logic for Border Color
-r_b = 0; g_b = 0; b_b = 0;
-t_flavor == 1 ? (r_b=0.8; g_b=0.2; b_b=0.2); // British (Red)
-t_flavor == 2 ? (r_b=0.9; g_b=0.9; b_b=0.2); // SSL (Yellow)
-t_flavor == 3 ? (r_b=0.2; g_b=0.6; b_b=1.0); // API (Blue)
-t_flavor == 4 ? (r_b=0.8; g_b=0.4; b_b=0.8); // Modern (Purple)
+  !is_embedded ? (
+    // MAIN CONSOLE UI
+    gfx_clear = 28 + 28*256 + 30*65536; 
+    gfx_set(1, 1, 1, 0.1); gfx_x = 10; gfx_y = 15; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE");
+    draw_meter(min(meter_input * 6.5, 1), 50, 75, 450, 12, "CIRCUIT DRIVE STRENGTH", 0);
+    r_col = t_bypass == 1 ? 1 : 0; g_col = t_bypass == 1 ? 0.2 : 1; b_col = t_bypass == 1 ? 0.2 : 0.5;
+    draw_button(50, 120, 450, 35, 1, t_bypass == 0 ? "MOLECULAR NETWORK: ACTIVE" : "GLOBAL BYPASS ENGAGED", r_col, g_col, b_col);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 120 && mouse_y <= 155) ? ( t_bypass = 1 - t_bypass; gmem[7] = t_bypass; slider_automate(t_bypass); );
+    is_xt_visually_active = (t_xtalk == 1 && t_bypass == 0);
+    draw_button(50, 170, 450, 35, is_xt_visually_active, t_xtalk == 1 ? "ANALOG CROSSTALK: ON" : "ANALOG CROSSTALK: OFF", 0.8, 0.4, 1);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 500 && mouse_y >= 170 && mouse_y <= 205) ? ( t_xtalk = 1 - t_xtalk; gmem[21] = t_xtalk; slider_automate(t_xtalk); );
+    t_topo == 2 ? (
+      mode_name = (t_xt_mode == 0) ? "XT MODE: VINTAGE" : (t_xt_mode == 1) ? "XT MODE: MODERN" : "XT MODE: BOUTIQUE";
+      xt_mode_state = (t_xtalk == 1 && t_bypass == 0) ? 2 : 0; draw_button(50, 207, 220, 20, xt_mode_state, mode_name, 0.2, 0.35, 0.7);
+      (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= 207 && mouse_y <= 227) ? ( t_xt_mode = (t_xt_mode + 1) % 3; slider_automate(t_xt_mode); gmem[23] = t_xt_mode; );
+    ) : (
+      gfx_set(1, 1, 1, 0.3); gfx_setfont(1, "Arial", 11);
+      slave_mode = (t_xt_mode == 0) ? "VINTAGE" : (t_xt_mode == 1) ? "MODERN" : "BOUTIQUE"; info_s = sprintf(#, "XT SYNC: %s", slave_mode);
+      gfx_measurestr(info_s, iw, ih); gfx_x = 50; gfx_y = 210; gfx_drawstr(info_s);
+    );
+    eng_name = (t_engine_mode == 0) ? "ENGINE: ORIGINAL v2.0" : "ENGINE: IRON MOD"; eng_r = (t_engine_mode == 0) ? 0.2 : 0.8; eng_g = (t_engine_mode == 0) ? 0.6 : 0.2; eng_b = 0.2;
+    draw_button(280, 207, 220, 20, 1, eng_name, eng_r, eng_g, eng_b);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= 207 && mouse_y <= 227) ? ( t_engine_mode = 1 - t_engine_mode; slider_automate(t_engine_mode); gmem[24] = t_engine_mode; );
+    r_y = 240; draw_button(50, r_y, 220, 35, 0, "REGEN ID (LOCAL)", 0, 0, 0);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 50 && mouse_x <= 270 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( t_id = floor(rand(180)) + 1; slider_automate(t_id); unit_seed = t_id / 180; cluster_id = floor((t_id - 1) / 18); );
+    draw_button(280, r_y, 220, 35, 0, "RESHUFFLE ALL IDs", 0.2, 0, 0);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( gmem[11] = floor(rand(1000)); gmem[1] = 0; gmem[0] += 1; );
+    has_master == 0 ? ( gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 13, 'b'); warn_s = "WARNING: NO MASTER DETECTED (NETWORK SAG INACTIVE)"; gfx_measurestr(warn_s, ww, wh); gfx_x = 50 + (450 - ww)/2; gfx_y = 285; gfx_drawstr(warn_s); );
+    id_conflict == 1 ? ( gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b'); warn_text = "ID DUPLICATE!"; gfx_measurestr(warn_text, dw, dh); gfx_x = 500 - dw; gfx_y = 315; gfx_drawstr(warn_text); );
+    gfx_set(1, 1, 1, 0.05); gfx_rect(50, 305, 450, 1); gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
+    topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER"; cal_str = (t_topo == 1) ? (t_calib_mode == 0 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
+    status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal_str, cluster_id + 1);
+    gfx_measurestr(status_str, sw, sh); gfx_x = 50 + (450 - sw)/2; gfx_y = 315; gfx_drawstr(status_str);
+    (gfx_h < 415) ? ( gfx_set(1, 0.3, 0.3, 1); gfx_setfont(1, "Arial", 11, 'b'); txt = "UI HIDDEN: EXPAND WINDOW ▼"; gfx_measurestr(txt, w, h); gfx_x = gfx_w - w - 10; gfx_y = 15; gfx_drawstr(txt); );
+    bar_y = 340; gfx_set(0.1, 0.1, 0.12, 1); gfx_rect(0, bar_y, 550, 80); gfx_set(1, 1, 1, 0.1); gfx_line(0, bar_y, 550, bar_y);
+    draw_button(30, bar_y + 15, 100, 50, t_link_on, t_link_on ? "LINK: ON" : "LINK: OFF", 0, 0.6, 0.2);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 30 && mouse_x <= 130 && mouse_y >= bar_y + 15 && mouse_y <= bar_y + 65) ? ( t_link_on = 1 - t_link_on; slider_automate(t_link_on); );
+    t_link_on ? (
+      l_base = 5000; st_ch = gmem[l_base+0]; st_bus = gmem[l_base+1]; st_mtr = gmem[l_base+2];
+      draw_scope_button(160, bar_y + 15, 40, 20, st_ch, "CH"); (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 200 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( gmem[l_base+0] = 1 - gmem[l_base+0]; gmem[70] = (gmem[l_base+0] == 1); );
+      draw_scope_button(210, bar_y + 15, 40, 20, st_bus, "BUS"); (mouse_cap & 1 && !last_cap && mouse_x >= 210 && mouse_x <= 250 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( gmem[l_base+1] = 1 - gmem[l_base+1]; gmem[71] = (gmem[l_base+1] == 1); );
+      draw_scope_button(260, bar_y + 15, 40, 20, st_mtr, "MTR"); (mouse_cap & 1 && !last_cap && mouse_x >= 260 && mouse_x <= 300 && mouse_y >= bar_y+15 && mouse_y <= bar_y+35) ? ( gmem[l_base+2] = 1 - gmem[l_base+2]; gmem[72] = (gmem[l_base+2] == 1); );
+      draw_trim_button(160, bar_y + 45, 65, 20, 0, "< TRIM"); (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 225 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? ( st_ch ? atomic_add(gmem[1000 + 3], -0.025); st_bus ? atomic_add(gmem[2000 + 3], -0.025); st_mtr ? atomic_add(gmem[3000 + 3], -0.025); );
+      draw_trim_button(235, bar_y + 45, 65, 20, 0, "TRIM >"); (mouse_cap & 1 && !last_cap && mouse_x >= 235 && mouse_x <= 300 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? ( st_ch ? atomic_add(gmem[1000 + 3], 0.025); st_bus ? atomic_add(gmem[2000 + 3], 0.025); st_mtr ? atomic_add(gmem[3000 + 3], 0.025); );
+    );
+    flav_name = (t_flavor == 0) ? "CUSTOM" : (t_flavor == 1) ? "BRITISH A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : "MODERN";
+    r_b = 0; g_b = 0; b_b = 0;
+    t_flavor == 1 ? (r_b=0.8; g_b=0.2; b_b=0.2); t_flavor == 2 ? (r_b=0.9; g_b=0.9; b_b=0.2); t_flavor == 3 ? (r_b=0.2; g_b=0.6; b_b=1.0); t_flavor == 4 ? (r_b=0.8; g_b=0.4; b_b=0.8);
+    draw_button(330, bar_y + 15, 190, 50, 0, flav_name, 0, 0, 0);
+    t_flavor > 0 ? ( gfx_set(r_b, g_b, b_b, 1); gfx_rect(330, bar_y + 62, 190, 3); );
+    gfx_set(1, 1, 1, 0.5); gfx_triangle(490, bar_y+35, 500, bar_y+35, 495, bar_y+45);
+    (mouse_cap & 1 && !last_cap && mouse_x >= 330 && mouse_x <= 520 && mouse_y >= bar_y+15 && mouse_y <= bar_y+65) ? (
+      gfx_x = mouse_x; gfx_y = mouse_y; sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern");
+      sel > 0 ? ( t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
+    );
+  ) : (
+    // EMBEDDED FILTER UI
+    gfx_clear = 0x202020; mid_x = gfx_w * 0.5;
+    gfx_h < 40 ? ( btn_h = 0; show_buttons = 0; ) : ( btn_h = 18; show_buttons = 1; ); text_area_h = gfx_h - btn_h;
+    title_area_h = text_area_h * 0.35; value_area_h = text_area_h * 0.65;
+    ideal_val_sz = max(16, value_area_h * 0.8); w_avail = mid_x - 10; max_sz_by_width = w_avail / 2.2; font_sz = min(ideal_val_sz, max_sz_by_width);
+    raw_title_sz = title_area_h * 0.8; title_font_sz = min(raw_title_sz, 30);
+    gfx_setfont(1, "Arial", font_sz, 'b'); gfx_setfont(2, "Arial", font_sz*0.4, 'b'); gfx_setfont(3, "Arial", 10); gfx_setfont(4, "Arial", title_font_sz, 'b'); 
 
-draw_button(330, bar_y + 15, 190, 50, 0, flav_name, 0, 0, 0);
+    t_filters_on == 1 ? (
+        t_hpf > 0 ? gfx_set(0.2, 0.12, 0.12, 1) : gfx_set(0.12, 0.12, 0.12, 1); gfx_rect(0, 0, mid_x, gfx_h);
+        t_lpf < 20000 ? gfx_set(0.12, 0.14, 0.2, 1) : gfx_set(0.12, 0.12, 0.12, 1); gfx_rect(mid_x, 0, gfx_w - mid_x, gfx_h);
+    ) : ( gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(0, 0, gfx_w, gfx_h); );
+    gfx_set(0, 0, 0, 1); gfx_line(mid_x, 0, mid_x, gfx_h);
 
-// Draw Colored Bottom Border
-t_flavor > 0 ? (
-  gfx_set(r_b, g_b, b_b, 1);
-  gfx_rect(330, bar_y + 62, 190, 3); 
-);
+    mouse_cap & 3 ? (
+      is_right_click = (mouse_cap & 2) == 2;
+      last_cap == 0 ? ( 
+          init_mouse_y = mouse_y; init_hpf = t_hpf; init_lpf = t_lpf; button_clicked = 0; 
+          abs(mouse_x - mid_x) < 20 && mouse_y < 25 && !is_right_click ? ( t_filters_on = 1 - t_filters_on; slider_automate(t_filters_on); button_clicked = 1; ) : (
+            is_btn_zone = (show_buttons && mouse_y > text_area_h);
+            is_btn_zone ? (
+               button_clicked = 1; margin_side=4; spacing=2; num_btns=5; avail_w = mid_x - (margin_side*2); bw = max(10, (avail_w - (spacing*(num_btns-1)))/num_btns);
+               mouse_x < mid_x ? (
+                  bx = margin_side;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(30) : (t_hpf=slider30; slider_automate(t_hpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(31) : (t_hpf=slider31; slider_automate(t_hpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(32) : (t_hpf=slider32; slider_automate(t_hpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(33) : (t_hpf=slider33; slider_automate(t_hpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_hpf_menu(34) : (t_hpf=slider34; slider_automate(t_hpf)); ); 
+               ) : (
+                  bx = mid_x + margin_side;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(35) : (t_lpf=slider35; slider_automate(t_lpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(36) : (t_lpf=slider36; slider_automate(t_lpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(37) : (t_lpf=slider37; slider_automate(t_lpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(38) : (t_lpf=slider38; slider_automate(t_lpf)); ); bx+=bw+spacing;
+                  mouse_x > bx && mouse_x < bx+bw ? ( is_right_click ? handle_lpf_menu(39) : (t_lpf=slider39; slider_automate(t_lpf)); );
+               );
+               init_hpf = t_hpf; init_lpf = t_lpf;
+            );
+          );
+      );
+      button_clicked == 0 && !is_right_click ? (
+         dist_y = (init_mouse_y - mouse_y);
+         mouse_x < mid_x ? ( 
+           new_val = init_hpf + (dist_y * 3);
+           t_hpf = (new_val < 20) ? 0 : max(20, min(500, new_val)); // SNAPS TO 20 OR 0
+           slider_automate(t_hpf);
+         ) : ( 
+           new_val = init_lpf + (dist_y * 50); step = 200; snapped_val = floor(new_val / step + 0.5) * step;
+           t_lpf = max(1000, min(22000, snapped_val)); slider_automate(t_lpf);
+         );
+      );
+    );
+    
+    cx = mid_x * 0.5; title_cy = title_area_h * 0.5; value_cy = title_area_h + (value_area_h * 0.5);
+    t_filters_on == 1 ? gfx_set(0.5, 0.5, 0.5, 1) : gfx_set(0.3, 0.3, 0.3, 1); gfx_setfont(4); gfx_measurestr("HPF", tw, th); gfx_x = cx - tw*0.5; gfx_y = title_cy - th*0.5; gfx_drawstr("HPF");
+    t_filters_on == 1 ? gfx_set(0.9, 0.9, 0.9, 1) : gfx_set(0.4, 0.4, 0.4, 1);
+    t_hpf > 0 ? (
+        sprintf(#str_val, "%d", t_hpf); gfx_setfont(1); gfx_measurestr(#str_val, w_val, h_val); gfx_setfont(2); gfx_measurestr("Hz", w_unit, h_unit); total_w = w_val + w_unit + 4; start_x = cx - (total_w * 0.5);
+        gfx_setfont(1); gfx_x = start_x; gfx_y = value_cy - h_val*0.5; gfx_drawstr(#str_val); gfx_setfont(2); gfx_x = start_x + w_val + 2; gfx_y = value_cy - h_unit*0.5 + h_unit*0.25; gfx_drawstr("Hz");
+    ) : ( gfx_setfont(1); gfx_set(0.5, 0.5, 0.5, 1); gfx_measurestr("OFF", w_off, h_off); gfx_x = cx - w_off*0.5; gfx_y = value_cy - h_off*0.5; gfx_drawstr("OFF"); );
 
-// Draw small arrow icon
-gfx_set(1, 1, 1, 0.5); gfx_triangle(490, bar_y+35, 500, bar_y+35, 495, bar_y+45);
+    cx = mid_x + (mid_x * 0.5);
+    t_filters_on == 1 ? gfx_set(0.5, 0.5, 0.5, 1) : gfx_set(0.3, 0.3, 0.3, 1); gfx_setfont(4); gfx_measurestr("LPF", tw, th); gfx_x = cx - tw*0.5; gfx_y = title_cy - th*0.5; gfx_drawstr("LPF");
+    t_filters_on == 1 ? gfx_set(0.9, 0.9, 0.9, 1) : gfx_set(0.4, 0.4, 0.4, 1);
+    t_lpf < 20000 ? (
+        sprintf(#str_val, "%.1f", t_lpf/1000); gfx_setfont(1); gfx_measurestr(#str_val, w_val, h_val); gfx_setfont(2); gfx_measurestr("k", w_unit, h_unit); total_w = w_val + w_unit + 4; start_x = cx - (total_w * 0.5);
+        gfx_setfont(1); gfx_x = start_x; gfx_y = value_cy - h_val*0.5; gfx_drawstr(#str_val); gfx_setfont(2); gfx_x = start_x + w_val + 2; gfx_y = value_cy - h_unit*0.5 + h_unit*0.25; gfx_drawstr("k");
+    ) : ( gfx_setfont(1); gfx_set(0.5, 0.5, 0.5, 1); gfx_measurestr("OFF", w_off, h_off); gfx_x = cx - w_off*0.5; gfx_y = value_cy - h_off*0.5; gfx_drawstr("OFF"); );
 
-(mouse_cap & 1 && !last_cap && mouse_x >= 330 && mouse_x <= 520 && mouse_y >= bar_y+15 && mouse_y <= bar_y+65) ? (
-  gfx_x = mouse_x; gfx_y = mouse_y;
-  sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern");
-  sel > 0 ? ( t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
-);
+    show_buttons ? (
+        gfx_setfont(3); margin_side=4; spacing=2; num_btns=5; avail_w = mid_x - (margin_side*2); bw = max(10, (avail_w - (spacing*(num_btns-1)))/num_btns); by = gfx_h - btn_h + 2; bh = btn_h - 4; t_filters_on == 0 ? ( btn_alpha = 0.3; ) : ( btn_alpha = 1; );
+        bx = margin_side; val=slider30; t_hpf==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider31; t_hpf==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider32; t_hpf==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider33; t_hpf==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider34; t_hpf==val ? gfx_set(1,0.7,0.3,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%d", val); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+        bx = mid_x + margin_side; val=slider35; t_lpf==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider36; t_lpf==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider37; t_lpf==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider38; t_lpf==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing; val=slider39; t_lpf==val ? gfx_set(0.2,0.8,1,btn_alpha):gfx_set(0.2,0.2,0.2,btn_alpha); gfx_rect(bx,by,bw,bh); gfx_set(0,0,0,btn_alpha); sprintf(#lbl, "%dk", val/1000); draw_btn_label(#lbl,bx,bw,by); bx+=bw+spacing;
+    );
+    t_filters_on == 1 ? gfx_set(0, 1, 0, 1) : gfx_set(1, 0, 0, 1); cx = mid_x; cy = 12; r = 6; gfx_circle(cx, cy, r, 1); gfx_set(0, 0, 0, 1); gfx_circle(cx, cy, r-2, 0); gfx_line(cx, cy-r+2, cx, cy);
+  );
 
 last_cap = mouse_cap;
