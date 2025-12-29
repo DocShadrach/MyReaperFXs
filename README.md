@@ -52,4 +52,4 @@ Use at your own risk.
 
 ## Author
 
-Hernán J. Sardi (Doc Shadrach)
+Doc Shadrach
