@@ -3,7 +3,7 @@ Copyright (c) 2025 Hernán J. Sardi
 All rights reserved.
 
 Permission is granted to use this software exclusively as compiled or interpreted
-within the REAPER Digital Audio Workstation for personal, non-commercial purposes.
+within the REAPER Digital Audio Workstation for personal or professional projects.
 
 The source code is provided for inspection and educational purposes only.
 
@@ -14,6 +14,5 @@ from the author:
 - Modifying the source code
 - Redistributing the software or its source code
 - Creating derivative works
-- Commercial use of any kind
 
 Any unauthorized use constitutes a violation of copyright law.
