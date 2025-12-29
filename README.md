@@ -17,7 +17,7 @@ You are allowed to:
 1. Open **REAPER**
 2. Go to **Extensions → ReaPack → Import a repository**
 3. Paste the following URL:
-[url]https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/master/index.xml[/url]
+https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/master/index.xml
 4. Click **OK**
 5. Go to **Extensions → ReaPack → Browse packages**
 6. Find the desired JSFX and install it
