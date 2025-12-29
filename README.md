@@ -5,13 +5,6 @@ A collection of custom JSFX effects for the REAPER Digital Audio Workstation.
 These effects are experimental tools focused on audio processing concepts, workflow ideas,
 and sonic experimentation inside REAPER.
 
-## Usage
-
-You are allowed to:
-
-- Use these JSFX effects inside REAPER
-- Load, run and test them for personal, non-commercial purposes
-
 ## How to add this repository to ReaPack
 
 1. Open **REAPER**
