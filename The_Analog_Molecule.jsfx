@@ -1,17 +1,18 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.1
+// version: 2.1.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
 // derived from 'Interstage' and 'Console9', released under the MIT License.
+// Copyright (c) 2018 Chris Johnson
 // Global network and thermal bloom architecture by Doc Shadrach.
-// 
-
-// NEW in v2.1!!
-// ENGINE A: Original v2.0 (Dynamic/Clean/Airwindows based)
-// ENGINE B: Iron Mod (Bias/Core/Tanh Saturation)
-// Global Engine Sync implemented.
+//
+// Copyright (c) 2025 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
 
 options:gmem=AnalogMoleculeHybrid
 
@@ -736,7 +737,7 @@ draw_button(50, r_y, 220, 35, 0, "REGEN ID (LOCAL)", 0, 0, 0);
   cluster_id = floor((t_id - 1) / 18); 
 );
 
-draw_button(280, r_y, 220, 35, 0, "RESHUFFLE ALL (GLOBAL)", 0.2, 0, 0);
+draw_button(280, r_y, 220, 35, 0, "RESHUFFLE ALL IDs", 0.2, 0, 0);
 (mouse_cap & 1 && !last_cap && mouse_x >= 280 && mouse_x <= 500 && mouse_y >= r_y && mouse_y <= r_y + 35) ? ( 
   gmem[11] = floor(rand(1000)); 
   gmem[1] = 0; 
