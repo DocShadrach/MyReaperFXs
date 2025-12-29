@@ -1,4 +1,4 @@
-# MyReaperFXs
+# REAPER FXs Collection by DocShadrach
 
 A collection of custom JSFX effects for the REAPER Digital Audio Workstation.
 
