@@ -23,10 +23,10 @@ You are allowed to:
 6. Find the desired JSFX and install it
 7. Restart REAPER if required
 
-### Notes
+## Notes
 
-- These JSFX effects are intended for use **inside REAPER only**
-- Personal, non-commercial use only
+- These JSFX effects are intended for use inside REAPER only
+- You may use them in **personal or professional projects**
 - This repository is **not open source**
 - See the `LICENSE` file in the repository for full terms
 
@@ -42,9 +42,8 @@ You are NOT allowed to:
 - Modify the source code
 - Redistribute the software or its source code
 - Create derivative works
-- Use the software for commercial purposes
 
-See the LICENSE file for full terms.
+See the `LICENSE` file for full terms.
 
 ## Disclaimer
 
