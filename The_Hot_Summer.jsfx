@@ -1,12 +1,18 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.3
+// version: 1.4
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
 // derived from Airwindows by Chris Johnson, used under MIT License.
+// Copyright (c) 2018 Chris Johnson
 // Global network and physical rail architecture by Doc Shadrach.
 //
+// Copyright (c) 2025 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
 
 options:gmem=TheHotSummerNetwork
 
@@ -14,14 +20,19 @@ slider1:t_topo=0<0,1,1{Stem Sender (Bus),Master Summer (Main)}>Topology
 slider2:t_mode=4<0,4,1{Signature,Vintage British,Discrete American,Modern Ultra-Linear,Master Controlled}>Console Flavor
 slider3:t_stem=0<0,7,1{Stem 1 (3-4),Stem 2 (5-6),Stem 3 (7-8),Stem 4 (9-10),Stem 5 (11-12),Stem 6 (13-14),Stem 7 (15-16),Stem 8 (17-18)}>Stem ID
 slider4:t_drive=0<-12,18,0.1>Compensated Drive (dB)
-slider5:t_stress=20<0,100,1>Bus Stress (Voltage Sag) %
-slider6:t_xtalk=8<0,100,1>Inductive Crosstalk %
-slider7:t_iron=15<0,80,1>Transformer Weight (Iron) %
-slider8:t_delta=0<0,1,1{Normal Sum,Delta Monitor}>Signal Monitoring
-slider9:t_inertia=250<1,1000,1>Rail Inertia (ms)
-slider10:t_bypass=0<0,1,1{Active Physical Summing,Clean Digital Sum}>Summing Mode
-slider11:t_out_gain=0<-12,12,0.1>Master Output Gain (dB)
-slider12:t_os=1<0,2,1{Off,2x (High),4x (Ultra)}>Global Oversampling
+
+// --- PSU SECTION ---
+slider5:t_psu_mode=0<0,3,1{Custom (Manual),Vintage (Sag),Modern (Punchy),Mastering (Linear)}>-Power Supply Type
+slider6:t_stress=6<0,100,1>Bus Stress (Custom Only) %
+slider7:t_inertia=250<1,1000,1>Rail Inertia (Custom Only) ms
+// -------------------
+
+slider8:t_xtalk=10<0,100,1>Inductive Crosstalk %
+slider9:t_iron=15<0,80,1>Transformer Weight (Iron) %
+slider10:t_delta=0<0,1,1{Normal Sum,Delta Monitor}>Signal Monitoring
+slider11:t_bypass=0<0,1,1{Active Physical Summing,Clean Digital Sum}>Summing Mode
+slider12:t_out_gain=0<-12,12,0.1>Master Output Gain (dB)
+slider13:t_os=1<0,2,1{Off,2x (High),4x (Ultra)}>Global Oversampling
 
 in_pin:output L (Bus)
 in_pin:output R (Bus)
@@ -244,12 +255,21 @@ fpdL = 16386 + rand(2147483647);
 fpdR = 16386 + rand(2147483647); 
 
 @slider
+// VISIBILITY LOGIC
 t_topo == 0 ? (
-  slider_show(16 | 32 | 64 | 256 | 1024, 0); 
+  slider_show(16 | 32 | 64 | 256 | 1024 | 4096, 0); 
   slider_show(4 | 8, 1);
 ) : (
   slider_show(4, 0); 
-  slider_show(8 | 16 | 32 | 64 | 256 | 1024, 1);
+  slider_show(8 | 16, 1);
+  
+  t_psu_mode == 0 ? (
+    slider_show(32 | 64, 1); // Show Stress & Inertia in Custom
+  ) : (
+    slider_show(32 | 64, 0); 
+  );
+  
+  slider_show(128 | 256 | 512 | 1024 | 2048 | 4096, 1);
 );
 
 gmem[16] = t_bypass;
@@ -258,9 +278,12 @@ gmem[18] = t_inertia;
 gmem[19] = t_os; 
 
 target_drive = pow(10, t_drive/20);
-target_xtalk_gain = (t_xtalk/100) * 0.05; 
+
+// NEW LOGARITHMIC CROSSTALK SCALE
+// 0% = Off, 10% = -90dB, 100% = -45dB
+target_xtalk_gain = (t_xtalk > 0) ? pow(10, (-95 + (t_xtalk * 0.5)) / 20) : 0.0;
+
 target_iron_gain = (t_iron / 100);
-s_stress_mult = (t_stress / 100) * 5.0; 
 s_out_gain = pow(10, (t_out_gain - 6.0) / 20); 
 
 stem_bias_L = (t_stem - 3.2) * 0.01; 
@@ -375,7 +398,8 @@ t_topo == 0 ? (
     local_railL = local_railL * local_inertiaL + global_rail_raw * (1.0 - local_inertiaL);
     local_railR = local_railR * local_inertiaR + global_rail_raw * (1.0 - local_inertiaR);
     
-    t_os > 0 ? (
+    // MOD: True Delta logic
+    (t_os > 0 && t_delta == 0) ? (
       upL.advanceSinc(spl0); upR.advanceSinc(spl1);
       loop(os_N,
         sL = upL.getSubSample(); sR = upR.getSubSample();
@@ -392,7 +416,8 @@ t_topo == 0 ? (
         lastL = sL; lastR = sR;
 
         actual_mode == 1 ? ( sL += sL*sL * (0.05 + local_drift); sR += sR*sR * (0.05 + local_drift); );
-        actual_mode == 2 ? ( sL += sL*sL*sL * 0.35; sR += sR*sR*sR * 0.35; );
+        actual_mode == 2 ? ( sL += (sL*sL * 0.04) + (sL*sL*sL * 0.35); sR += (sR*sR * 0.04) + (sR*sR*sR * 0.35); );
+        
         sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
         ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
         oAL = ap_cL * sL + apL_state; apL_state = sL - ap_cL * oAL; sL = oAL;
@@ -413,7 +438,6 @@ t_topo == 0 ? (
       slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
       slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
       
-      // SLEW COMPENSATION FOR NO OVERSAMPLING
       slew_mod *= 2.2; 
       
       sL = lastL + (sL - lastL) * max(min((slew_mod * local_railL) + jitterL, 0.99), 0.01); 
@@ -421,7 +445,8 @@ t_topo == 0 ? (
       lastL = sL; lastR = sR;
 
       actual_mode == 1 ? ( sL += sL*sL * (0.05 + local_drift); sR += sR*sR * (0.05 + local_drift); );
-      actual_mode == 2 ? ( sL += sL*sL*sL * 0.35; sR += sR*sR*sR * 0.35; );
+      actual_mode == 2 ? ( sL += (sL*sL * 0.04) + (sL*sL*sL * 0.35); sR += (sR*sR * 0.04) + (sR*sR*sR * 0.35); );
+      
       sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
       ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
       oAL = ap_cL * sL + apL_state; apL_state = sL - ap_cL * oAL; sL = oAL;
@@ -431,7 +456,6 @@ t_topo == 0 ? (
       spl0 = sL / eff_stem_drive; spl1 = sR / eff_stem_drive;
     );
   ) : (
-    // --- STEM SENDER BYPASS (STATE SCRUBBER) ---
     lastL *= 0.5; lastR *= 0.5;
     apL_state *= 0.5; apR_state *= 0.5;
     (abs(lastL) < denorm) ? lastL = 0; 
@@ -458,25 +482,41 @@ t_topo == 0 ? (
     (v > 0.001) ? (
       active_stems += 1;
       dryL += cL; dryR += cR; 
-      dynamic_xtalk = s_xtalk_gain * (1.1 - rail_smooth);
-      xtL_f1_arr[j] = xtL_f1_arr[j] * 0.85 + (cL + denorm) * 0.15; 
-      xtL_f2_arr[j] = xtL_f2_arr[j] * 0.85 + xtL_f1_arr[j] * 0.15;
-      xtR_f1_arr[j] = xtR_f1_arr[j] * 0.85 + (cR + denorm) * 0.15; 
-      xtR_f2_arr[j] = xtR_f2_arr[j] * 0.85 + xtR_f1_arr[j] * 0.15;
-      sumL += cL + (xtR_f2_arr[j] * dynamic_xtalk);
-      sumR += cR + (xtL_f2_arr[j] * dynamic_xtalk);
+      
+      dynamic_xtalk = s_xtalk_gain; 
+      xt_hp_coeff = 0.4; 
+      xtL_f1_arr[j] += (cL - xtL_f1_arr[j]) * xt_hp_coeff; 
+      xtL_high = cL - xtL_f1_arr[j]; 
+      xtR_f1_arr[j] += (cR - xtR_f1_arr[j]) * xt_hp_coeff;
+      xtR_high = cR - xtR_f1_arr[j];
+      sumL += cL - (xtR_high * dynamic_xtalk * 0.5); 
+      sumR += cR - (xtL_high * dynamic_xtalk * 0.5);
+      
       total_demand += (abs(cL) + abs(cR)) * 0.5;
     );
     j += 1;
   );
   
   t_bypass == 0 ? (
-    target_sag = 1.0 / (1.0 + (total_demand * s_stress_mult * 0.15));
+    // --- POWER SUPPLY SIMULATION ---
+    t_psu_mode == 0 ? (
+      s_stress_mult = (t_stress / 100) * 5.0; 
+      target_sag = 1.0 / (1.0 + (total_demand * s_stress_mult * 0.15));
+      rail_inertia_coeff = exp(-inv_srate / (max(t_inertia, 1) / 1000));
+    ) : t_psu_mode == 1 ? ( 
+      target_sag = 1.0 / (1.0 + (total_demand * 0.5 * 0.15));
+      rail_inertia_coeff = 0.9995; 
+    ) : t_psu_mode == 2 ? (
+      target_sag = 1.0 / (1.0 + (total_demand * 0.05 * 0.15));
+      rail_inertia_coeff = 0.90; 
+    ) : (
+      target_sag = 1.0;
+      rail_inertia_coeff = 0.0;
+    );
+    
     rail_smooth = rail_smooth * rail_inertia_coeff + target_sag * (1.0 - rail_inertia_coeff);
     gmem[20] = rail_smooth; 
     
-    // CPU OPTIMIZATION: CACHE HEADROOM CALCULATION
-    // active_stems only changes on fade in/out, no need to calc pow() every sample
     (active_stems != last_active_stems) ? (
       cached_headroom = active_stems > 1 ? 1 / pow(active_stems, 0.25) : 1.0;
       last_active_stems = active_stems;
@@ -487,7 +527,8 @@ t_topo == 0 ? (
     delta_refL = sumL; delta_refR = sumR;
     base_sumL = sumL; base_sumR = sumR;
 
-    t_os > 0 ? (
+    // MOD: True Delta logic in Master Summer as well
+    (t_os > 0 && t_delta == 0) ? (
       upL.advanceSinc(base_sumL);
       upR.advanceSinc(base_sumR);
       
@@ -499,7 +540,6 @@ t_topo == 0 ? (
         proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
         proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
         
-        // --- MASTER FLAVOR INJECTION ---
         slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
         slew_mod = slew_base * (1 + (1.0 - rail_smooth) * 4.5) * (headroom_offset * 0.5 + 0.5);
         
@@ -507,14 +547,12 @@ t_topo == 0 ? (
         proc_sumR = last_sumR + (proc_sumR - last_sumR) * max(min((slew_mod * rail_smooth), 0.99), 0.01);
         last_sumL = proc_sumL; last_sumR = proc_sumR;
 
-        // CALIBRATED HARMONICS
         actual_mode == 0 ? ( 
           proc_sumL += (proc_sumL*proc_sumL * 0.04) + (proc_sumL*proc_sumL*proc_sumL * 0.15); 
           proc_sumR += (proc_sumR*proc_sumR * 0.04) + (proc_sumR*proc_sumR*proc_sumR * 0.15); 
         );
         actual_mode == 1 ? ( proc_sumL += proc_sumL*proc_sumL * 0.08; proc_sumR += proc_sumR*proc_sumR * 0.08; );
-        actual_mode == 2 ? ( proc_sumL += proc_sumL*proc_sumL*proc_sumL * 0.45; proc_sumR += proc_sumR*proc_sumR*proc_sumR * 0.45; );
-        // ------------------------------------------
+        actual_mode == 2 ? ( proc_sumL += (proc_sumL*proc_sumL * 0.05) + (proc_sumL*proc_sumL*proc_sumL * 0.45); proc_sumR += (proc_sumR*proc_sumR * 0.05) + (proc_sumR*proc_sumR*proc_sumR * 0.45); );
 
         c2_sat = s_iron_gain * 0.95; 
         c2_scale = (1.0 - c2_sat); c2_scale *= c2_scale; 
@@ -552,12 +590,9 @@ t_topo == 0 ? (
       proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
       proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
       
-      // --- MASTER FLAVOR INJECTION (FIX v1.5 + v1.7 + v1.8) ---
       slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
-      
       slew_mod = slew_base * (1 + (1.0 - rail_smooth) * 4.5) * (headroom_offset * 0.5 + 0.5);
       
-      // SLEW COMPENSATION FOR NO OVERSAMPLING
       slew_mod *= 2.2;
 
       proc_sumL = last_sumL + (proc_sumL - last_sumL) * max(min((slew_mod * rail_smooth), 0.99), 0.01); 
@@ -569,8 +604,7 @@ t_topo == 0 ? (
         proc_sumR += (proc_sumR*proc_sumR * 0.04) + (proc_sumR*proc_sumR*proc_sumR * 0.15); 
       );
       actual_mode == 1 ? ( proc_sumL += proc_sumL*proc_sumL * 0.08; proc_sumR += proc_sumR*proc_sumR * 0.08; );
-      actual_mode == 2 ? ( proc_sumL += proc_sumL*proc_sumL*proc_sumL * 0.45; proc_sumR += proc_sumR*proc_sumR*proc_sumR * 0.45; );
-      // ------------------------------------------
+      actual_mode == 2 ? ( proc_sumL += (proc_sumL*proc_sumL * 0.05) + (proc_sumL*proc_sumL*proc_sumL * 0.45); proc_sumR += (proc_sumR*proc_sumR * 0.05) + (proc_sumR*proc_sumR*proc_sumR * 0.45); );
       
       c2_sat = s_iron_gain * 0.95; 
       c2_scale = (1.0 - c2_sat); c2_scale *= c2_scale; 
@@ -630,7 +664,6 @@ t_topo == 0 ? (
   ) : (
     // MASTER SUMMER BYPASS
     spl0 = dryL; spl1 = dryR; gmem[20] = 1.0;
-    // Scrubber for Master
     h_hystL *= 0.5; h_hystR *= 0.5;
     last_sumL *= 0.5; last_sumR *= 0.5; 
     (abs(h_hystL) < denorm) ? h_hystL = 0;
@@ -668,6 +701,18 @@ t_bypass == 1 ? (
       );
     ) : (
       gfx_drawstr(sprintf(#, "MODE: MASTER SUMMER | ACTIVE STEMS: %d | OUT GAIN: %+.1f dB", active_stems, t_out_gain));
+      
+      // WARNING UI IF WINDOW TOO SMALL (ADJUSTED THRESHOLD)
+      (gfx_h < 230) ? (
+        gfx_set(1, 0.3, 0.3, 1);
+        gfx_setfont(1, "Arial", 11, 'b');
+        txt = "EXPAND WINDOW ▼";
+        gfx_measurestr(txt, w, h);
+        gfx_x = gfx_w - w - 10;
+        gfx_y = 15;
+        gfx_drawstr(txt);
+      );
+
       t_mode == 4 ? (
         gfx_x = 20; gfx_y = 70; gfx_set(1, 0.3, 0.3, 1);
         gfx_drawstr("WARNING: MASTER CANNOT BE 'MASTER CONTROLLED'. FORCING SIGNATURE.");
@@ -679,7 +724,8 @@ t_topo == 1 && t_bypass == 0 ? (
   i = 0; loop(8,
     vL = spl(i*2 + 2); vR = spl(i*2 + 3); act = abs(vL) + abs(vR);
     act_db = 20 * log10(max(act, 0.000001)); h_mtr = max(min((act_db + 80) * 1.5, 100), 4);
-    x_pos = 20 + (i*55); y_mtr_bottom = 145; led_y = 160; led_x = x_pos + 22;
+    // UI SHIFT: Everything moved up by 50px
+    x_pos = 20 + (i*55); y_mtr_bottom = 95; led_y = 110; led_x = x_pos + 22;
     active_map[i] ? (
       mouse_cap & 1 && !last_cap && sqrt((mouse_x-led_x)^2 + (mouse_y-led_y)^2) < 10 ? (
         stem_mute[i] = 1 - stem_mute[i];
@@ -688,7 +734,6 @@ t_topo == 1 && t_bypass == 0 ? (
         stem_solo[i] = 1 - stem_solo[i];
       );
       
-      // LOGIC UPDATE: PRIORITY CHECK -> SOLO AND MUTE = ORANGE
       (stem_solo[i] && stem_mute[i]) ? gfx_set(1, 0.5, 0, 1) : 
       stem_solo[i] ? gfx_set(1, 0.9, 0, 1) : 
       stem_mute[i] ? gfx_set(0.8, 0.1, 0.1, 1) : 
@@ -703,18 +748,25 @@ t_topo == 1 && t_bypass == 0 ? (
     ) : ( gfx_set(0.3, 0.3, 0.3, 0.2); );
     gfx_rect(x_pos, y_mtr_bottom, 45, -h_mtr);
     s_label = sprintf(#, "S%d", i+1); gfx_measurestr(s_label, tw, th);
-    gfx_x = led_x - tw/2; gfx_y = led_y + 25; // Labels centered and slightly lower
+    gfx_x = led_x - tw/2; gfx_y = led_y + 25; 
     active_map[i] && stem_solo[i] ? gfx_set(1, 0.9, 0, 1) : gfx_set(1, 1, 1, 0.5);
     gfx_drawstr(s_label); i += 1;
   );
-  gfx_set(1, 1, 1, 0.2); gfx_x = 20; gfx_y = 210;
+  gfx_set(1, 1, 1, 0.2); gfx_x = 20; gfx_y = 160;
   tempo > 0 ? (
     q_ms = 60000 / tempo;
     gfx_drawstr(sprintf(#, "TEMPO SYNC TIP: 1/4 = %dms | 1/8 = %dms", q_ms, q_ms/2));
   );
-  gfx_set(1, 0.6, 0, 1); gfx_x = 20; gfx_y = 230;
-  gfx_drawstr(sprintf(#, "BUS STRESS (RAIL SAG): %d%%", (1.0 - gmem[20]) * 100));
-  gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(20, 250, 460, 16);
-  gfx_set(1, 0.4, 0, 1); gfx_rect(20, 250, (1.0 - gmem[20]) * 1500 * (t_stress/100), 16);
+  
+  // UI UPDATE FOR PSU MODE
+  gfx_set(1, 0.6, 0, 1); gfx_x = 20; gfx_y = 180;
+  psu_str = (t_psu_mode == 0) ? "CUSTOM (MANUAL)" : (t_psu_mode == 1) ? "VINTAGE (SAG)" : (t_psu_mode == 2) ? "MODERN (PUNCH)" : "MASTERING (LINEAR)";
+  gfx_drawstr(sprintf(#, "POWER SUPPLY: %s", psu_str));
+  
+  // Draw Activity Meter
+  gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(20, 200, 460, 16);
+  gfx_set(0.4, 0.8, 1, 0.5); 
+  rail_vis = (1.0 - gmem[20]) * 5000; 
+  gfx_rect(20, 200, min(rail_vis, 460), 16);
 );
 last_cap = mouse_cap;
