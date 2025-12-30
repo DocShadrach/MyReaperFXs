@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.4
+// version: 1.5
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -33,6 +33,10 @@ slider10:t_delta=0<0,1,1{Normal Sum,Delta Monitor}>Signal Monitoring
 slider11:t_bypass=0<0,1,1{Active Physical Summing,Clean Digital Sum}>Summing Mode
 slider12:t_out_gain=0<-12,12,0.1>Master Output Gain (dB)
 slider13:t_os=1<0,2,1{Off,2x (High),4x (Ultra)}>Global Oversampling
+
+// --- GRAVITY SECTION ---
+slider14:t_gravity=0<0,100,0.1>Gravity (Density/Glue) %
+slider15:t_grav_bypass=0<0,1,1>-Gravity Bypass State
 
 in_pin:output L (Bus)
 in_pin:output R (Bus)
@@ -104,6 +108,11 @@ s_drive = 1.0;
 s_recovery = 1.0;
 s_iron_gain = 0.0;
 s_xtalk_gain = 0.0;
+
+// Gravity State
+s_gravity = 0.0;
+stem_gr_arr = freemem; freemem += 8;
+i=0; loop(8, stem_gr_arr[i]=1.0; i+=1;);
 
 // OVERSAMPLING FUNCTIONS
 function sinc(fir, nt, bw, g)
@@ -226,7 +235,6 @@ function getSubSample()
   );
 
 // MEMORY ALLOCATION & CLEANUP
-freemem = 0;
 active_map = freemem; freemem += 8;
 stem_vol = freemem; freemem += 8; 
 stem_mute = freemem; freemem += 8; 
@@ -259,6 +267,9 @@ fpdR = 16386 + rand(2147483647);
 t_topo == 0 ? (
   slider_show(16 | 32 | 64 | 256 | 1024 | 4096, 0); 
   slider_show(4 | 8, 1);
+  
+  // Hide Gravity Sliders in Stem Sender
+  slider_show(8192 | 16384, 0);
 ) : (
   slider_show(4, 0); 
   slider_show(8 | 16, 1);
@@ -270,6 +281,11 @@ t_topo == 0 ? (
   );
   
   slider_show(128 | 256 | 512 | 1024 | 2048 | 4096, 1);
+  
+  // Show Gravity Slider (Master)
+  slider_show(8192, 1); 
+  // Hide Gravity Bypass (Screen Only)
+  slider_show(16384, 0);
 );
 
 gmem[16] = t_bypass;
@@ -279,7 +295,7 @@ gmem[19] = t_os;
 
 target_drive = pow(10, t_drive/20);
 
-// NEW LOGARITHMIC CROSSTALK SCALE
+// REVERTED TO ORIGINAL LOGARITHMIC SCALE FOR BIT-PERFECT MATCH
 // 0% = Off, 10% = -90dB, 100% = -45dB
 target_xtalk_gain = (t_xtalk > 0) ? pow(10, (-95 + (t_xtalk * 0.5)) / 20) : 0.0;
 
@@ -369,6 +385,9 @@ s_recovery = 1.0 / s_drive;
 s_iron_gain = s_iron_gain * param_smooth + target_iron_gain * (1.0 - param_smooth);
 s_xtalk_gain = s_xtalk_gain * param_smooth + target_xtalk_gain * (1.0 - param_smooth);
 
+// Smooth Gravity parameter
+s_gravity = s_gravity * param_smooth + (t_gravity * 0.01) * (1.0 - param_smooth);
+
 fpdL = (fpdL * 1103515245 + 12345) & 2147483647;
 fpdR = (fpdR * 1103515245 + 12345) & 2147483647;
 jitterL = (fpdL / 2147483647 - 0.5) * 0.0000001;
@@ -409,14 +428,31 @@ t_topo == 0 ? (
         abs(sL) > clp ? sL = (clp + (1-clp)*sin((abs(sL)-clp)/(1.5-clp)*half_pi))*sign(sL);
         abs(sR) > clp ? sR = (clp + (1-clp)*sin((abs(sR)-clp)/(1.5-clp)*half_pi))*sign(sR);
         
-        slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
+        // SAFE MAX/MIN STRUCTURE (Safe Syntax FIX)
+        slew_base = 0.50; 
+        (actual_mode == 1) ? slew_base = 0.38;
+        (actual_mode == 2) ? slew_base = 0.70;
+        (actual_mode == 3) ? slew_base = 0.85;
+        
         slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
-        sL = lastL + (sL - lastL) * max(min((slew_mod * local_railL) + jitterL, 0.99), 0.01); 
-        sR = lastR + (sR - lastR) * max(min((slew_mod * local_railR) + jitterR, 0.99), 0.01);
+        
+        limitL = (slew_mod * local_railL) + jitterL;
+        limitL = max(min(limitL, 0.99), 0.01);
+        limitR = (slew_mod * local_railR) + jitterR;
+        limitR = max(min(limitR, 0.99), 0.01);
+        
+        sL = lastL + (sL - lastL) * limitL; 
+        sR = lastR + (sR - lastR) * limitR;
         lastL = sL; lastR = sR;
 
-        actual_mode == 1 ? ( sL += sL*sL * (0.05 + local_drift); sR += sR*sR * (0.05 + local_drift); );
-        actual_mode == 2 ? ( sL += (sL*sL * 0.04) + (sL*sL*sL * 0.35); sR += (sR*sR * 0.04) + (sR*sR*sR * 0.35); );
+        actual_mode == 1 ? ( 
+            sL += sL*sL * (0.05 + local_drift); 
+            sR += sR*sR * (0.05 + local_drift); 
+        );
+        actual_mode == 2 ? ( 
+            sL += (sL*sL * 0.04) + (sL*sL*sL * 0.35); 
+            sR += (sR*sR * 0.04) + (sR*sR*sR * 0.35); 
+        );
         
         sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
         ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
@@ -435,17 +471,31 @@ t_topo == 0 ? (
       abs(sL) > clp ? sL = (clp + (1-clp)*sin((abs(sL)-clp)/(1.5-clp)*half_pi))*sign(sL);
       abs(sR) > clp ? sR = (clp + (1-clp)*sin((abs(sR)-clp)/(1.5-clp)*half_pi))*sign(sR);
       
-      slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
-      slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
+      slew_base = 0.50; 
+      (actual_mode == 1) ? slew_base = 0.38;
+      (actual_mode == 2) ? slew_base = 0.70;
+      (actual_mode == 3) ? slew_base = 0.85;
       
+      slew_mod = slew_base * (1 + local_drift * 4.5) * (headroom_offset * 0.5 + 0.5);
       slew_mod *= 2.2; 
       
-      sL = lastL + (sL - lastL) * max(min((slew_mod * local_railL) + jitterL, 0.99), 0.01); 
-      sR = lastR + (sR - lastR) * max(min((slew_mod * local_railR) + jitterR, 0.99), 0.01);
+      limitL = (slew_mod * local_railL) + jitterL;
+      limitL = max(min(limitL, 0.99), 0.01);
+      limitR = (slew_mod * local_railR) + jitterR;
+      limitR = max(min(limitR, 0.99), 0.01);
+      
+      sL = lastL + (sL - lastL) * limitL; 
+      sR = lastR + (sR - lastR) * limitR;
       lastL = sL; lastR = sR;
 
-      actual_mode == 1 ? ( sL += sL*sL * (0.05 + local_drift); sR += sR*sR * (0.05 + local_drift); );
-      actual_mode == 2 ? ( sL += (sL*sL * 0.04) + (sL*sL*sL * 0.35); sR += (sR*sR * 0.04) + (sR*sR*sR * 0.35); );
+      actual_mode == 1 ? ( 
+          sL += sL*sL * (0.05 + local_drift); 
+          sR += sR*sR * (0.05 + local_drift); 
+      );
+      actual_mode == 2 ? ( 
+          sL += (sL*sL * 0.04) + (sL*sL*sL * 0.35); 
+          sR += (sR*sR * 0.04) + (sR*sR*sR * 0.35); 
+      );
       
       sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
       ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
@@ -473,6 +523,20 @@ t_topo == 0 ? (
   
   sumL = 0; sumR = 0; dryL = 0; dryR = 0;
   active_stems = 0; total_demand = 0;
+  
+  // --- GRAVITY CONTEXT SETUP ---
+  g_rail = gmem[20];
+  g_stress_factor = (1.0 - g_rail) * 5.0; // 0.0 to ~1.0
+  
+  grav_thresh = 0.6 - (s_gravity * 0.4) - (g_stress_factor * 0.2 * s_gravity);
+  grav_ratio = 1.5 + (s_gravity * 8.0) + (g_stress_factor * 4.0);
+  grav_makeup = 1.0; 
+
+  att_ms = 30 - (s_gravity * 29);
+  rel_ms = 200 - (s_gravity * 150);
+  gr_att = exp(-inv_srate / (att_ms * 0.001));
+  gr_rel = exp(-inv_srate / (rel_ms * 0.001));
+
   j = 0; loop(8,
     is_active = active_map[j];
     target_v = (is_active && !stem_mute[j] && (any_solo == 0 || stem_solo[j])) ? 1.0 : 0.0;
@@ -483,6 +547,44 @@ t_topo == 0 ? (
       active_stems += 1;
       dryL += cL; dryR += cR; 
       
+      // Calculate Demand BEFORE compression (Correct Logic for PSU & Audit)
+      total_demand += (abs(cL) + abs(cR)) * 0.5;
+      
+      // --- GRAVITY ENGINE ---
+      // If Gravity is 0 or Bypassed, this block is skipped entirely.
+      // Therefore, cL and cR remain identical to v1.4.
+      (s_gravity > 0.01 && t_grav_bypass == 0) ? (
+        stem_in = max(abs(cL), abs(cR));
+        over = stem_in - grav_thresh;
+        curr_gr = stem_gr_arr[j];
+        
+        target_gr = 1.0;
+        over > 0 ? (
+           reduced = over / grav_ratio;
+           target_gr = (grav_thresh + reduced) / stem_in; 
+        );
+        
+        (target_gr < curr_gr) ? (
+             curr_gr = target_gr * gr_att + curr_gr * (1-gr_att);
+        ) : (
+             curr_gr = target_gr * gr_rel + curr_gr * (1-gr_rel);
+        );
+
+        stem_gr_arr[j] = curr_gr;
+        
+        // Wet path
+        wetL = cL * curr_gr * grav_makeup;
+        wetR = cR * curr_gr * grav_makeup;
+        
+        // Parallel Mix (MODIFIED: 70% Dry, 30% Wet)
+        cL = (cL * 0.70) + (wetL * 0.30);
+        cR = (cR * 0.70) + (wetR * 0.30);
+      ) : (
+        stem_gr_arr[j] = 1.0;
+      );
+      // ----------------------
+
+      // CROSSTALK LOGIC (HIGHPASS SUBTRACTION)
       dynamic_xtalk = s_xtalk_gain; 
       xt_hp_coeff = 0.4; 
       xtL_f1_arr[j] += (cL - xtL_f1_arr[j]) * xt_hp_coeff; 
@@ -491,8 +593,6 @@ t_topo == 0 ? (
       xtR_high = cR - xtR_f1_arr[j];
       sumL += cL - (xtR_high * dynamic_xtalk * 0.5); 
       sumR += cR - (xtL_high * dynamic_xtalk * 0.5);
-      
-      total_demand += (abs(cL) + abs(cR)) * 0.5;
     );
     j += 1;
   );
@@ -540,13 +640,21 @@ t_topo == 0 ? (
         proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
         proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
         
-        slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
+        slew_base = 0.50; 
+        (actual_mode == 1) ? slew_base = 0.38;
+        (actual_mode == 2) ? slew_base = 0.70;
+        (actual_mode == 3) ? slew_base = 0.85;
+        
         slew_mod = slew_base * (1 + (1.0 - rail_smooth) * 4.5) * (headroom_offset * 0.5 + 0.5);
         
-        proc_sumL = last_sumL + (proc_sumL - last_sumL) * max(min((slew_mod * rail_smooth), 0.99), 0.01); 
-        proc_sumR = last_sumR + (proc_sumR - last_sumR) * max(min((slew_mod * rail_smooth), 0.99), 0.01);
+        limitL = (slew_mod * rail_smooth); limitL = max(min(limitL, 0.99), 0.01);
+        limitR = (slew_mod * rail_smooth); limitR = max(min(limitR, 0.99), 0.01);
+        
+        proc_sumL = last_sumL + (proc_sumL - last_sumL) * limitL; 
+        proc_sumR = last_sumR + (proc_sumR - last_sumR) * limitR;
         last_sumL = proc_sumL; last_sumR = proc_sumR;
 
+        // RESTORED HARMONICS
         actual_mode == 0 ? ( 
           proc_sumL += (proc_sumL*proc_sumL * 0.04) + (proc_sumL*proc_sumL*proc_sumL * 0.15); 
           proc_sumR += (proc_sumR*proc_sumR * 0.04) + (proc_sumR*proc_sumR*proc_sumR * 0.15); 
@@ -590,13 +698,20 @@ t_topo == 0 ? (
       proc_sumL = asin(max(min(proc_sumL, 0.999), -0.999));
       proc_sumR = asin(max(min(proc_sumR, 0.999), -0.999));
       
-      slew_base = (actual_mode == 1) ? 0.38 : (actual_mode == 2) ? 0.70 : (actual_mode == 3) ? 0.85 : 0.50;
+      slew_base = 0.50; 
+      (actual_mode == 1) ? slew_base = 0.38;
+      (actual_mode == 2) ? slew_base = 0.70;
+      (actual_mode == 3) ? slew_base = 0.85;
+      
       slew_mod = slew_base * (1 + (1.0 - rail_smooth) * 4.5) * (headroom_offset * 0.5 + 0.5);
       
       slew_mod *= 2.2;
 
-      proc_sumL = last_sumL + (proc_sumL - last_sumL) * max(min((slew_mod * rail_smooth), 0.99), 0.01); 
-      proc_sumR = last_sumR + (proc_sumR - last_sumR) * max(min((slew_mod * rail_smooth), 0.99), 0.01);
+      limitL = (slew_mod * rail_smooth); limitL = max(min(limitL, 0.99), 0.01);
+      limitR = (slew_mod * rail_smooth); limitR = max(min(limitR, 0.99), 0.01);
+
+      proc_sumL = last_sumL + (proc_sumL - last_sumL) * limitL; 
+      proc_sumR = last_sumR + (proc_sumR - last_sumR) * limitR;
       last_sumL = proc_sumL; last_sumR = proc_sumR;
 
       actual_mode == 0 ? ( 
@@ -670,6 +785,8 @@ t_topo == 0 ? (
     (abs(h_hystR) < denorm) ? h_hystR = 0;
     (abs(last_sumL) < denorm) ? last_sumL = 0;
     (abs(last_sumR) < denorm) ? last_sumR = 0;
+    
+    k=0; loop(8, stem_gr_arr[k]=1.0; k+=1;);
   );
   k = 2; loop(16, spl(k) = 0; k += 1; );
 );
@@ -702,8 +819,8 @@ t_bypass == 1 ? (
     ) : (
       gfx_drawstr(sprintf(#, "MODE: MASTER SUMMER | ACTIVE STEMS: %d | OUT GAIN: %+.1f dB", active_stems, t_out_gain));
       
-      // WARNING UI IF WINDOW TOO SMALL (ADJUSTED THRESHOLD)
-      (gfx_h < 230) ? (
+      // WARNING UI IF WINDOW TOO SMALL
+      (gfx_h < 250) ? (
         gfx_set(1, 0.3, 0.3, 1);
         gfx_setfont(1, "Arial", 11, 'b');
         txt = "EXPAND WINDOW ▼";
@@ -724,8 +841,9 @@ t_topo == 1 && t_bypass == 0 ? (
   i = 0; loop(8,
     vL = spl(i*2 + 2); vR = spl(i*2 + 3); act = abs(vL) + abs(vR);
     act_db = 20 * log10(max(act, 0.000001)); h_mtr = max(min((act_db + 80) * 1.5, 100), 4);
-    // UI SHIFT: Everything moved up by 50px
-    x_pos = 20 + (i*55); y_mtr_bottom = 95; led_y = 110; led_x = x_pos + 22;
+    
+    x_pos = 34 + (i*55); y_mtr_bottom = 95; led_y = 100; led_x = x_pos + 22;
+    
     active_map[i] ? (
       mouse_cap & 1 && !last_cap && sqrt((mouse_x-led_x)^2 + (mouse_y-led_y)^2) < 10 ? (
         stem_mute[i] = 1 - stem_mute[i];
@@ -738,6 +856,7 @@ t_topo == 1 && t_bypass == 0 ? (
       stem_solo[i] ? gfx_set(1, 0.9, 0, 1) : 
       stem_mute[i] ? gfx_set(0.8, 0.1, 0.1, 1) : 
       (act > led_thresh ? gfx_set(0.2, 1, 0.4, 1) : gfx_set(0.1, 0.4, 0.2, 1));
+      
     ) : ( gfx_set(0.2, 0.2, 0.2, 1); );
     gfx_circle(led_x, led_y, 7, 1); 
     active_map[i] ? (
@@ -752,21 +871,46 @@ t_topo == 1 && t_bypass == 0 ? (
     active_map[i] && stem_solo[i] ? gfx_set(1, 0.9, 0, 1) : gfx_set(1, 1, 1, 0.5);
     gfx_drawstr(s_label); i += 1;
   );
+  
   gfx_set(1, 1, 1, 0.2); gfx_x = 20; gfx_y = 160;
   tempo > 0 ? (
     q_ms = 60000 / tempo;
     gfx_drawstr(sprintf(#, "TEMPO SYNC TIP: 1/4 = %dms | 1/8 = %dms", q_ms, q_ms/2));
   );
   
-  // UI UPDATE FOR PSU MODE
   gfx_set(1, 0.6, 0, 1); gfx_x = 20; gfx_y = 180;
-  psu_str = (t_psu_mode == 0) ? "CUSTOM (MANUAL)" : (t_psu_mode == 1) ? "VINTAGE (SAG)" : (t_psu_mode == 2) ? "MODERN (PUNCH)" : "MASTERING (LINEAR)";
-  gfx_drawstr(sprintf(#, "POWER SUPPLY: %s", psu_str));
+  sag_percent = (1.0 - gmem[20]) * 100;
+  gfx_drawstr(sprintf(#, "BUS STRESS (RAIL SAG): %.1f%%", sag_percent));
   
-  // Draw Activity Meter
   gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(20, 200, 460, 16);
-  gfx_set(0.4, 0.8, 1, 0.5); 
+  gfx_set(1, 0.4, 0, 1); 
+  
   rail_vis = (1.0 - gmem[20]) * 5000; 
   gfx_rect(20, 200, min(rail_vis, 460), 16);
+  
+  // GRAVITY VISUAL (STATIC - MOVED UP TO FIT)
+  t_gravity > 0 ? (
+     gfx_set(0.5, 0.2, 1.0, 1); gfx_x = 20; gfx_y = 225;
+     gfx_drawstr(sprintf(#, "GRAVITY ENGINE: %.1f%%", t_gravity));
+     
+     // GRAVITY BYPASS TOGGLE
+     btn_x = 350; btn_y = 225; btn_w = 80; btn_h = 18;
+     gfx_set(0.2, 0.2, 0.3, 1); gfx_rect(btn_x, btn_y, btn_w, btn_h);
+     t_grav_bypass ? gfx_set(0.5, 0.2, 0.2, 1) : gfx_set(0.2, 0.8, 0.2, 1);
+     gfx_rect(btn_x+2, btn_y+2, btn_w-4, btn_h-4);
+     gfx_set(0,0,0,1); gfx_setfont(1, "Arial", 11, 'b');
+     lbl = t_grav_bypass ? "BYPASSED" : "ACTIVE";
+     gfx_measurestr(lbl, lw, lh); gfx_x = btn_x + (btn_w-lw)/2; gfx_y = btn_y + (btn_h-lh)/2;
+     gfx_drawstr(lbl);
+     
+     (mouse_cap & 1 && !(last_mouse_cap & 1) && mouse_x >= btn_x && mouse_x <= btn_x+btn_w && mouse_y >= btn_y && mouse_y <= btn_y+btn_h) ? (
+       t_grav_bypass = 1 - t_grav_bypass; slider_automate(t_grav_bypass);
+     );
+
+     // STATIC BAR ONLY - Shows how much Gravity is dialed in
+     gfx_set(0.5, 0.2, 1.0, 1);
+     bar_w = 460 * (t_gravity/100);
+     gfx_rect(20, 245, bar_w, 4);
+  );
 );
 last_cap = mouse_cap;
