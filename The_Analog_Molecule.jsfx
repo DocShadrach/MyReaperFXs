@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.2
+// version: 2.2.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -93,7 +93,7 @@ function update_filters() (
     a0_l = 1 + alpha_l;
     l_a0 = (1 - cosw0_l) / 2 / a0_l;
     l_a1 = (1 - cosw0_l) / a0_l;
-    l_a2 = (1 - cosw0_l) / a0_l;
+    l_a2 = (1 - cosw0_l) / 2 / a0_l;
     l_b1 = -2 * cosw0_l / a0_l;
     l_b2 = (1 - alpha_l) / a0_l;
   );
