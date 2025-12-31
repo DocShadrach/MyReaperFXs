@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.2.1
+// version: 2.2.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -83,7 +83,7 @@ function update_filters() (
   );
 
   // LPF Coefficients (Only calc if valid)
-  t_lpf < 20000 ? (
+  t_lpf <= 20000 ? (
     lpf_freq = t_lpf;
     lpf_q = 0.707; 
     w0_l = 2 * $pi * lpf_freq / srate;
@@ -106,6 +106,8 @@ iirAmount = 0.00295 / overallscale;
 ist_threshold_base = 0.381966011250105;
 smooth = exp(-inv_srate / 0.045);
 thermal_rel = exp(-inv_srate / 2.5);
+
+update_filters();
 
 // --- OPTIMIZED PHYSICS CONSTANTS ---
 rail_loss = 1.0 - exp(-inv_srate / 0.025);
