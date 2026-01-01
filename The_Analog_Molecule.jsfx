@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.2.2
+// version: 2.2.3
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -251,6 +251,45 @@ gmem[24] = t_engine_mode;
 
 // DETECT LINK TOGGLE
 (t_link_on != last_link_state) ? (
+  // NEW LOGIC v2.2.3: Check parameter match when turning ON to determine flavor name
+  (t_link_on == 1) ? (
+     match_flv = 0;
+     c_flx = to_int(t_flux); c_thm = to_int(t_thermal); c_ana = to_int(t_analog);
+     
+     // British (1)
+     match = 0;
+     t_topo == 0 ? ( c_flx==35 && c_thm==40 && c_ana==25 ? match=1; );
+     t_topo == 1 ? ( c_flx==25 && c_thm==50 && c_ana==30 && t_calib_mode==0 ? match=1; );
+     t_topo == 2 ? ( c_flx==15 && c_thm==30 && c_ana==20 && t_xt_mode==0 ? match=1; );
+     match ? match_flv = 1;
+     
+     // Solid State E (2)
+     match = 0;
+     t_topo == 0 ? ( c_flx==20 && c_thm==20 && c_ana==15 ? match=1; );
+     t_topo == 1 ? ( c_flx==15 && c_thm==35 && c_ana==20 && t_calib_mode==1 ? match=1; );
+     t_topo == 2 ? ( c_flx==10 && c_thm==20 && c_ana==12 && t_xt_mode==1 ? match=1; );
+     match ? match_flv = 2;
+
+     // US Discrete (3)
+     match = 0;
+     t_topo == 0 ? ( c_flx==10 && c_thm==10 && c_ana==10 ? match=1; );
+     t_topo == 1 ? ( c_flx==10 && c_thm==15 && c_ana==12 && t_calib_mode==0 ? match=1; );
+     t_topo == 2 ? ( c_flx==5 && c_thm==10 && c_ana==8 && t_xt_mode==0 ? match=1; );
+     match ? match_flv = 3;
+
+     // Modern (4)
+     match = 0;
+     t_topo == 0 ? ( c_flx==5 && c_thm==5 && c_ana==5 ? match=1; );
+     t_topo == 1 ? ( c_flx==5 && c_thm==5 && c_ana==5 && t_calib_mode==1 ? match=1; );
+     t_topo == 2 ? ( c_flx==2 && c_thm==5 && c_ana==2 && t_xt_mode=2 ? match=1; );
+     match ? match_flv = 4;
+     
+     t_flavor = match_flv;
+     slider_automate(t_flavor);
+     // Update last_flavor to avoid redundant triggers downstream
+     last_flavor = t_flavor;
+  );
+
   force_refresh = 1;
   last_link_state = t_link_on;
 );
@@ -671,7 +710,10 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     gfx_set(1, 1, 1, 0.5); gfx_triangle(490, bar_y+35, 500, bar_y+35, 495, bar_y+45);
     (mouse_cap & 1 && !last_cap && mouse_x >= 330 && mouse_x <= 520 && mouse_y >= bar_y+15 && mouse_y <= bar_y+65) ? (
       gfx_x = mouse_x; gfx_y = mouse_y; sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern");
-      sel > 0 ? ( t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
+      sel > 0 ? ( 
+         last_flavor = -1; // FORCE UPDATE IF SAME FLAVOR
+         t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); 
+      );
     );
   ) : (
     // EMBEDDED FILTER UI
