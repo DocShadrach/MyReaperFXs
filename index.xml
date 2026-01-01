@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="5627248ea66ef3d18b9a3ccfc29947c4888976a1">
+<index version="1" name="DocShadrach FXs" commit="4f96e3eab802487272a3a84c8552e490f67ddc14">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -269,12 +269,16 @@ Professional 180-Channel 3D Console Emulator.
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/0ec215990733182ba7b366966ff40300e5c5ae57/The_Analog_Molecule.jsfx</source>
     </version>
     <version name="2.2.1" author="Doc Shadrach" time="2025-12-31T07:00:00Z">
-     <changelog><![CDATA[BUF FIX: Filter calculation fixed.]]></changelog>
+     <changelog><![CDATA[BUG FIX: Filter calculation fixed.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/220b2b65ede772edf5036dc4b20fc4014c36406f/The_Analog_Molecule.jsfx</source>
     </version>
     <version name="2.2.2" author="Doc Shadrach" time="2025-12-31T09:00:00Z">
-     <changelog><![CDATA[BUF FIX: Prevent filters from clicking on their first launch.]]></changelog>
+     <changelog><![CDATA[BUG FIX: Prevent filters from clicking on their first launch.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/5627248ea66ef3d18b9a3ccfc29947c4888976a1/The_Analog_Molecule.jsfx</source>
+    </version>
+    <version name="2.2.3" author="Doc Shadrach" time="2026-01-01T07:00:00Z">
+     <changelog><![CDATA[Improvements to the linking system.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/4f96e3eab802487272a3a84c8552e490f67ddc14/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
 
