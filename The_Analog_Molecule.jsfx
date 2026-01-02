@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.2.3
+// version: 2.3
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -93,7 +93,7 @@ function update_filters() (
     a0_l = 1 + alpha_l;
     l_a0 = (1 - cosw0_l) / 2 / a0_l;
     l_a1 = (1 - cosw0_l) / a0_l;
-    l_a2 = (1 - cosw0_l) / 2 / a0_l;
+    l_a2 = (1 - cosw0_l) / a0_l;
     l_b1 = -2 * cosw0_l / a0_l;
     l_b2 = (1 - alpha_l) / a0_l;
   );
@@ -156,6 +156,8 @@ energy_accum = 0;
 buffered_rail = 0;
 rail_target = 0;
 xt_leak = 0; 
+last_xt_leak = 0;
+xt_tick = 0;
 
 xt_lp=0; xt_hp=0;
 xt_gain = 10^(-75/20); 
@@ -534,24 +536,44 @@ t_topo == 2 && (g_clock > 128) ? (
   gmem[PTR_BANK] = next_read;
 );
 
-xt_leak = 0;
+// --- NEW CROSSTALK ENGINE (Smart Refresh Rate) ---
+xt_leak = last_xt_leak; // Init with previous held value
+(t_bypass == 0 && t_xtalk) ? (
+    // Filter calc always runs for state continuity
+    xt_mono = (sL + sR) * 0.5; 
+    xt_lp = xt_lp * 0.85 + xt_mono * 0.15; 
+    xt_hp = xt_hp * 0.98 + xt_lp * 0.02; 
+    xt_final = xt_lp - xt_hp;
 
-(t_bypass == 0) ? (
-  t_xtalk ? (
-    read_bank_offset = gmem[PTR_BANK] * 100; write_bank_offset = (1 - gmem[PTR_BANK]) * 100; 
-    xt_mono = (sL + sR) * 0.5; xt_lp = xt_lp * 0.85 + xt_mono * 0.15; xt_hp = xt_hp * 0.98 + xt_lp * 0.02; xt_final = xt_lp - xt_hp;
-    atomic_add(gmem[BANK_A_OFFSET + cluster_id + write_bank_offset], xt_final);
-    xt_sum = gmem[BANK_A_OFFSET + cluster_id + read_bank_offset]; xt_leak = (xt_sum - xt_final) * xt_gain;
+    // Smart Atomic Decimation for High Sample Rates
+    run_atomic = 1;
+    (srate > 60000) ? (
+        xt_tick = (xt_tick + 1) & 1;
+        run_atomic = (xt_tick == 0);
+    );
+
+    run_atomic ? (
+        read_bank_offset = gmem[PTR_BANK] * 100; write_bank_offset = (1 - gmem[PTR_BANK]) * 100; 
+        atomic_add(gmem[BANK_A_OFFSET + cluster_id + write_bank_offset], xt_final);
+        xt_sum = gmem[BANK_A_OFFSET + cluster_id + read_bank_offset]; 
+        xt_leak = (xt_sum - xt_final) * xt_gain;
+        last_xt_leak = xt_leak; // Store for interpolation/hold
+    );
     sL += xt_leak * s_bypass; sR += xt_leak * s_bypass;
-  );
+) : (
+    last_xt_leak = 0; // Reset if bypassed
+    xt_leak = 0;
+);
+// -------------------------------------------------
   
-  (t_engine_mode == 1 && t_flavor > 0) ? (
+(t_engine_mode == 1 && t_flavor > 0 && t_bypass == 0) ? (
       (topo_core > 0) ? ( drive_core = 1.0 + (s_thermal * 0.05); sL = sL * drive_core; sR = sR * drive_core; );
       sL += topo_bias; sR += topo_bias; user_sat = 1.0 + (s_analog * 0.03); total_drive = topo_drive_push * user_sat;
       sL = tanh(sL * total_drive); sR = tanh(sR * total_drive);
       sL -= (topo_bias * 0.95); sR -= (topo_bias * 0.95); sL *= 1.05; sR *= 1.05;
-  );
+);
 
+(t_bypass == 0) ? (
   flux_freq = 16500 - (unit_seed * (6500 * topology_flux_depth)); 
   flux_coeff = (1 - s_flux * 0.12) * (flux_freq * inv_srate);
   apL_in = sL; sL = (apL_in * (flux_coeff - 1) + apL) / (1 + flux_coeff); apL = apL_in + sL * flux_coeff;
