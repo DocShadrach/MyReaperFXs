@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.5
+// version: 1.6
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -313,7 +313,7 @@ local_inertiaR = rail_inertia_coeff * (0.98 + (t_stem * 0.002));
 t_os != last_initialized_os ? (
   t_os > 0 ? (
     os_N = (t_os == 1) ? 2 : 4;
-    upL.updateSincFilter(os_N, 8, mem_up_coeffs, mem_tmp);
+    upL.updateSincFilter(os_N, 32, mem_up_coeffs, mem_tmp);
     upR.coeffs = mem_up_coeffs; 
     
     ds_taps = 32;
@@ -348,7 +348,7 @@ gmem[19] != last_global_os ? (
   t_os != last_initialized_os ? (
     t_os > 0 ? (
       os_N = (t_os == 1) ? 2 : 4;
-      upL.updateSincFilter(os_N, 8, mem_up_coeffs, mem_tmp);
+      upL.updateSincFilter(os_N, 32, mem_up_coeffs, mem_tmp);
       upR.coeffs = mem_up_coeffs; 
       ds_taps = 32;
       downL.updateSincDownsampleFilter(os_N, ds_taps, mem_down_coeffs);
