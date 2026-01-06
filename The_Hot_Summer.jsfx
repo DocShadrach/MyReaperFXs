@@ -122,20 +122,24 @@ function sinc(fir, nt, bw, g)
     pibw2   = 2.0*$pi*bw;
     pidnt2  = 2.0*$pi/nt;
     hnt     = 0.5*nt;
-    i       = 1;
-    loop(nt-1,
+    i       = 0; // FIXED: Start at 0 for full symmetry
+    
+    // FIXED: Loop exactly nt times to fill entire buffer
+    loop(nt,
       a  = (i - hnt) * pibw2;
       ys = (a != 0) ? sin(a)/a : 1.0;
       yg = g * (4.0 * bw);
       yw = 0.54 - 0.46 * cos(i * pidnt2);
-      fir[i-1] = yw * yg * ys;
+      fir[i] = yw * yg * ys;
       i += 1;
     );
   );
 
+// UNIFIED INSTANCE DEFINITION STRATEGY
 function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
   local(nHist, iFilt, nTaps)
-  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta)
+  // Master Instance List:
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta, hist, hend, hptr, nTaps)
   global()
   (
     N       = N_in;
@@ -144,7 +148,8 @@ function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
     coeffs  = targetmem;
     nTaps   = N*nHist;
     memset(coeffs,0,4000); 
-    sinc(tmp, nTaps, .5/N, .5*N);
+    // BW set to 0.54/N : Slight relaxation for 32 taps to keep top-end air
+    sinc(tmp, nTaps, .54/N, .5*N); 
     iFilt = 0; 
     delta = 0; 
     loop(nTaps,
@@ -169,6 +174,17 @@ function updateSincDownsampleFilter(N_in, nTaps_in, coeffmem)
 
 function initDownsampleHist(histmem, nTaps_in)
   instance(hist, hend, hptr, nTaps)
+  (
+    hist = histmem;
+    nTaps = nTaps_in;
+    hptr = hist;
+    hend = hist + nTaps;
+    memset(hist, 0, nTaps + 10);
+  );
+
+function initUpsampleHist(histmem, nTaps_in)
+  // Unified Instance List
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta, hist, hend, hptr, nTaps)
   (
     hist = histmem;
     nTaps = nTaps_in;
@@ -206,33 +222,47 @@ function sincDownSample()
   );
 
 function advanceSinc(sample)
-  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+  // Unified Instance List
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta, hist, hend, hptr, nTaps)
   global()
-  local(filt)
   (
-    h6 = h5; h5 = h4; h4 = h3; h3 = h2; h2 = h1; h1 = h0;
-    h0 = sample;
-    loc = 0;
+    hptr += 1;
+    (hptr == hend) ? hptr = hist;
+    hptr[] = sample;
+    loc = 0; 
   );
 
 function resetSincUp()
-  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+  // Unified Instance List
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta, hist, hend, hptr, nTaps)
   global()
-  local(filt)
   (
-    h0 = h1 = h2 = h3 = h4 = h5 = h6 = 0;
+    memset(hist, 0, nTaps + 10);
   );
 
 function getSubSample()
-  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+  // Unified Instance List
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta, hist, hend, hptr, nTaps)
   global()
-  local(filt, out)
+  local(filt, out, h_scan, hm1)
   (
-    filt = coeffs + loc;
-    out =  filt[] * h0 + filt[1] * h1 + filt[2] * h2 + filt[3] * h3 + filt[4] * h4 + filt[5] * h5 + filt[6] * h6;
+    hm1 = hist - 1;
+    filt = coeffs + loc; 
+    h_scan = hptr; 
+    out = 0;
+    
+    loop(nTaps,
+       out += h_scan[] * filt[];
+       filt += 1;
+       
+       // FIXED: Safer ternary syntax to prevent compiler errors
+       h_scan = (h_scan == hist) ? hend - 1 : h_scan - 1;
+    );
+
     loc += 100;
     out
   );
+// ------------------------------------------------------------------------
 
 // MEMORY ALLOCATION & CLEANUP
 active_map = freemem; freemem += 8;
@@ -258,6 +288,10 @@ mem_down_coeffs = freemem; freemem += 4000;
 mem_tmp         = freemem; freemem += 4000;
 mem_hist_dL     = freemem; freemem += 256;
 mem_hist_dR     = freemem; freemem += 256;
+
+// Added memory for Upsampler History
+mem_hist_uL     = freemem; freemem += 256;
+mem_hist_uR     = freemem; freemem += 256;
 
 fpdL = 16386 + rand(2147483647); 
 fpdR = 16386 + rand(2147483647); 
@@ -313,7 +347,8 @@ local_inertiaR = rail_inertia_coeff * (0.98 + (t_stem * 0.002));
 t_os != last_initialized_os ? (
   t_os > 0 ? (
     os_N = (t_os == 1) ? 2 : 4;
-    upL.updateSincFilter(os_N, 32, mem_up_coeffs, mem_tmp);
+    os_taps = 32; // SET TO 32 TAPS (PRO)
+    upL.updateSincFilter(os_N, os_taps, mem_up_coeffs, mem_tmp);
     upR.coeffs = mem_up_coeffs; 
     
     ds_taps = 32;
@@ -322,6 +357,11 @@ t_os != last_initialized_os ? (
     
     downL.initDownsampleHist(mem_hist_dL, ds_taps);
     downR.initDownsampleHist(mem_hist_dR, ds_taps);
+    
+    // Initialize Upsampler Buffer
+    upL.initUpsampleHist(mem_hist_uL, os_taps);
+    upR.initUpsampleHist(mem_hist_uR, os_taps);
+    
     upL.resetSincUp(); upR.resetSincUp();
   );
   last_initialized_os = t_os;
@@ -348,13 +388,18 @@ gmem[19] != last_global_os ? (
   t_os != last_initialized_os ? (
     t_os > 0 ? (
       os_N = (t_os == 1) ? 2 : 4;
-      upL.updateSincFilter(os_N, 32, mem_up_coeffs, mem_tmp);
+      os_taps = 32; // SET TO 32 TAPS
+      upL.updateSincFilter(os_N, os_taps, mem_up_coeffs, mem_tmp);
       upR.coeffs = mem_up_coeffs; 
       ds_taps = 32;
       downL.updateSincDownsampleFilter(os_N, ds_taps, mem_down_coeffs);
       downR.coeffs = mem_down_coeffs;
       downL.initDownsampleHist(mem_hist_dL, ds_taps);
       downR.initDownsampleHist(mem_hist_dR, ds_taps);
+      
+      upL.initUpsampleHist(mem_hist_uL, os_taps);
+      upR.initUpsampleHist(mem_hist_uR, os_taps);
+      
       upL.resetSincUp(); upR.resetSincUp();
     );
     last_initialized_os = t_os;
