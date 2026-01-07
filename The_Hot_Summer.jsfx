@@ -144,7 +144,8 @@ fpdR = 16386 + rand(2147483647);
 @slider
 // VISIBILITY LOGIC
 t_topo == 0 ? (
-  slider_show(16 | 32 | 64 | 256 | 1024 | 4096, 0); 
+  // Removed reference to 4096 (old slider 13) to prevent UI ghosting
+  slider_show(16 | 32 | 64 | 256 | 1024, 0); 
   slider_show(4 | 8, 1);
   
   // Hide Gravity Sliders in Stem Sender
@@ -159,7 +160,8 @@ t_topo == 0 ? (
     slider_show(32 | 64, 0); 
   );
   
-  slider_show(128 | 256 | 512 | 1024 | 2048 | 4096, 1);
+  // Removed reference to 4096
+  slider_show(128 | 256 | 512 | 1024 | 2048, 1);
   
   // Show Gravity Slider (Master)
   slider_show(8192, 1); 
