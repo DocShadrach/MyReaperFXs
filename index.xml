@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="8a30fc2e7b4a663efe5447e080e768eb3011b20a">
+<index version="1" name="DocShadrach FXs" commit="cc61e7236909062a1b40ac11f325cadeeabae5f5">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -335,6 +335,10 @@ A 16-ch Analog-Like Stem Summer.
     <version name="1.7.0" author="Doc Shadrach" time="2026-01-07T09:00:00Z">
      <changelog><![CDATA[The plugin no longer has built-in oversampling. There is a script available to easily enable Reaper's native oversampling on all instances.]]></changelog>
     <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/50ef86f5674f65031e2fca1819e1ea17527b8911/The_Hot_Summer.jsfx</source>
+    </version>
+    <version name="1.8.0" author="Doc Shadrach" time="2026-01-10T07:00:00Z">
+     <changelog><![CDATA[Added denormal protection to all DSP stages to prevent CPU spikes during silence.]]></changelog>
+    <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/cc61e7236909062a1b40ac11f325cadeeabae5f5/The_Hot_Summer.jsfx</source>
     </version>
     </reapack>
 
