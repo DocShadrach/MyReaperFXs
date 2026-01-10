@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.7
+// version: 1.8
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -66,7 +66,8 @@ log2_inv = 1 / log(2);
 dith_const = 1.1 * pow(10, -44); 
 half_pi = 1.57079632679;
 fade_smooth = exp(-inv_srate / 0.005); 
-denorm = 0.000000000000001; 
+// MOD v1.8: Updated to Additive Standard
+denorm = 10 ^ -30;
 
 c2_iir_val = 0.0015 * (48000.0 * inv_srate);
 led_thresh = 0.0000316;
@@ -255,7 +256,8 @@ t_topo == 0 ? (
     // --- ACTIVE PROCESSING ---
     local_drift = (drift_seed[t_stem] * drift_mod);
     cur_energy = max(abs(spl0), abs(spl1));
-    stem_energy_smooth_arr[t_stem] = stem_energy_smooth_arr[t_stem] * energy_smooth_coeff + cur_energy * (1.0 - energy_smooth_coeff);
+    // MOD v1.8: Added Denorm Protection to Energy Follower
+    stem_energy_smooth_arr[t_stem] = (stem_energy_smooth_arr[t_stem] * energy_smooth_coeff + cur_energy * (1.0 - energy_smooth_coeff)) + denorm;
     
     energy_factor = (actual_mode == 0) ? 1.05 : (actual_mode == 3) ? 1.2 : 1.35;
     eff_stem_drive = 1 + (s_drive - 1) * min(stem_energy_smooth_arr[t_stem] * energy_factor, 1);
@@ -300,17 +302,17 @@ t_topo == 0 ? (
     
     sL = sL + (sL*sL * (stem_bias_L + local_drift)); sR = sR + (sR*sR * (stem_bias_R + local_drift));
     ap_cL = max(min(0.08 + (abs(sL)*0.05), 0.9), 0.01); ap_cR = max(min(0.08 + (abs(sR)*0.05), 0.9), 0.01);
-    oAL = ap_cL * sL + apL_state; apL_state = sL - ap_cL * oAL; sL = oAL;
-    oAR = ap_cR * sR + apR_state; apR_state = sR - ap_cR * oAR; sR = oAR;
+    // MOD v1.8: Added Denorm to Allpass State
+    oAL = ap_cL * sL + apL_state; apL_state = (sL - ap_cL * oAL) + denorm; sL = oAL;
+    oAR = ap_cR * sR + apR_state; apR_state = (sR - ap_cR * oAR) + denorm; sR = oAR;
     sL = sin(max(min(sL * (local_railL + jitterL), 1.45), -1.45)); 
     sR = sin(max(min(sR * (local_railR + jitterR), 1.45), -1.45));
     spl0 = sL / eff_stem_drive; spl1 = sR / eff_stem_drive;
 
   ) : (
-    lastL *= 0.5; lastR *= 0.5;
-    apL_state *= 0.5; apR_state *= 0.5;
-    (abs(lastL) < denorm) ? lastL = 0; 
-    (abs(lastR) < denorm) ? lastR = 0;
+    // MOD v1.8: Replaced Flush-to-Zero with Additive Denorm
+    lastL = (lastL * 0.5) + denorm; lastR = (lastR * 0.5) + denorm;
+    apL_state = (apL_state * 0.5) + denorm; apR_state = (apR_state * 0.5) + denorm;
     
     spl0 = spl0; spl1 = spl1;
   );
@@ -388,9 +390,10 @@ t_topo == 0 ? (
       // CROSSTALK LOGIC (HIGHPASS SUBTRACTION)
       dynamic_xtalk = s_xtalk_gain; 
       xt_hp_coeff = 0.4; 
-      xtL_f1_arr[j] += (cL - xtL_f1_arr[j]) * xt_hp_coeff; 
+      // MOD v1.8: Added Denorm Protection to Crosstalk IIR
+      xtL_f1_arr[j] += ((cL - xtL_f1_arr[j]) * xt_hp_coeff) + denorm; 
       xtL_high = cL - xtL_f1_arr[j]; 
-      xtR_f1_arr[j] += (cR - xtR_f1_arr[j]) * xt_hp_coeff;
+      xtR_f1_arr[j] += ((cR - xtR_f1_arr[j]) * xt_hp_coeff) + denorm;
       xtR_high = cR - xtR_f1_arr[j];
       sumL += cL - (xtR_high * dynamic_xtalk * 0.5); 
       sumR += cR - (xtL_high * dynamic_xtalk * 0.5);
@@ -463,11 +466,9 @@ t_topo == 0 ? (
     c2_dL = proc_sumL / c2_scale; c2_dR = proc_sumR / c2_scale;
     c2_iir = c2_iir_val; 
     
-    h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir;
-    h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir;
-    
-    (abs(h_hystL) < denorm) ? h_hystL = 0;
-    (abs(h_hystR) < denorm) ? h_hystR = 0;
+    // MOD v1.8: Updated Hysteresis Protection (Removed flush-to-zero, added Denorm)
+    h_hystL = h_hystL * (1.0 - c2_iir) + c2_dL * c2_iir + denorm;
+    h_hystR = h_hystR * (1.0 - c2_iir) + c2_dR * c2_iir + denorm;
     
     c2_dL = max(min(c2_dL, 1.57), -1.57);
     c2_dR = max(min(c2_dR, 1.57), -1.57);
@@ -488,14 +489,17 @@ t_topo == 0 ? (
     sumL *= makeup_gain;
     sumR *= makeup_gain;
     
-    sum_wdL = sum_wdL * nh_att + (sumL * delta_refL) * (1 - nh_att);
-    sum_wwL = sum_wwL * nh_att + (sumL * sumL) * (1 - nh_att);
+    // MOD v1.8: Added Denorm to Null Hunter State
+    sum_wdL = sum_wdL * nh_att + (sumL * delta_refL) * (1 - nh_att) + denorm;
+    sum_wwL = sum_wwL * nh_att + (sumL * sumL) * (1 - nh_att) + denorm;
     null_gainL = (sum_wwL > 0.000001) ? (sum_wdL / sum_wwL) : 1.0;
-    sum_wdR = sum_wdR * nh_att + (sumR * delta_refR) * (1 - nh_att);
-    sum_wwR = sum_wwR * nh_att + (sumR * sumR) * (1 - nh_att);
+    sum_wdR = sum_wdR * nh_att + (sumR * delta_refR) * (1 - nh_att) + denorm;
+    sum_wwR = sum_wwR * nh_att + (sumR * sumR) * (1 - nh_att) + denorm;
     null_gainR = (sum_wwR > 0.000001) ? (sum_wdR / sum_wwR) : 1.0;
 
-    dcL = dcL * 0.9999 + sumL * 0.0001; dcR = dcR * 0.9999 + sumR * 0.0001;
+    // MOD v1.8: Added Denorm to DC Blocker
+    dcL = dcL * 0.9999 + sumL * 0.0001 + denorm; 
+    dcR = dcR * 0.9999 + sumR * 0.0001 + denorm;
     sumL -= dcL; sumR -= dcR;
     absL = abs(sumL); int_exL = absL > 0 ? floor(log(absL) * log2_inv) : 0;
     fpdL = (fpdL * 1103515245 + 12345) & 2147483647;
@@ -514,12 +518,9 @@ t_topo == 0 ? (
   ) : (
     // MASTER SUMMER BYPASS
     spl0 = dryL; spl1 = dryR; gmem[20] = 1.0;
-    h_hystL *= 0.5; h_hystR *= 0.5;
-    last_sumL *= 0.5; last_sumR *= 0.5; 
-    (abs(h_hystL) < denorm) ? h_hystL = 0;
-    (abs(h_hystR) < denorm) ? h_hystR = 0;
-    (abs(last_sumL) < denorm) ? last_sumL = 0;
-    (abs(last_sumR) < denorm) ? last_sumR = 0;
+    // MOD v1.8: Updated Bypass Decay to use Additive Denorm
+    h_hystL = (h_hystL * 0.5) + denorm; h_hystR = (h_hystR * 0.5) + denorm;
+    last_sumL = (last_sumL * 0.5) + denorm; last_sumR = (last_sumR * 0.5) + denorm; 
     
     k=0; loop(8, stem_gr_arr[k]=1.0; k+=1;);
   );
