@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.4
+// version: 2.5
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -106,6 +106,9 @@ iirAmount = 0.00295 / overallscale;
 ist_threshold_base = 0.381966011250105;
 smooth = exp(-inv_srate / 0.045);
 thermal_rel = exp(-inv_srate / 2.5);
+
+// --- DENORMAL PROTECTION CONSTANT ---
+denorm = 10 ^ -30;
 
 update_filters();
 
@@ -555,16 +558,16 @@ sL = rawL * s_calib; sR = rawR * s_calib;
 (t_filters_on) ? (
   // Only process if freq is "valid" (>= 20)
   (t_hpf >= 20) ? (
-    hp_L = (h_a0 * sL) + (h_a1 * hpf_x1L) + (h_a2 * hpf_x2L) - (h_b1 * hpf_y1L) - (h_b2 * hpf_y2L);
+    hp_L = (h_a0 * sL) + (h_a1 * hpf_x1L) + (h_a2 * hpf_x2L) - (h_b1 * hpf_y1L) - (h_b2 * hpf_y2L) + denorm;
     hpf_x2L = hpf_x1L; hpf_x1L = sL; hpf_y2L = hpf_y1L; hpf_y1L = hp_L; sL = hp_L;
-    hp_R = (h_a0 * sR) + (h_a1 * hpf_x1R) + (h_a2 * hpf_x2R) - (h_b1 * hpf_y1R) - (h_b2 * hpf_y2R);
+    hp_R = (h_a0 * sR) + (h_a1 * hpf_x1R) + (h_a2 * hpf_x2R) - (h_b1 * hpf_y1R) - (h_b2 * hpf_y2R) + denorm;
     hpf_x2R = hpf_x1R; hpf_x1R = sR; hpf_y2R = hpf_y1R; hpf_y1R = hp_R; sR = hp_R;
   );
   // Only process if freq is "valid" (< 20000)
   (t_lpf < 20000) ? (
-    lp_L = (l_a0 * sL) + (l_a1 * lpf_x1L) + (l_a2 * lpf_x2L) - (l_b1 * lpf_y1L) - (l_b2 * lpf_y2L);
+    lp_L = (l_a0 * sL) + (l_a1 * lpf_x1L) + (l_a2 * lpf_x2L) - (l_b1 * lpf_y1L) - (l_b2 * lpf_y2L) + denorm;
     lpf_x2L = lpf_x1L; lpf_x1L = sL; lpf_y2L = lpf_y1L; lpf_y1L = lp_L; sL = lp_L;
-    lp_R = (l_a0 * sR) + (l_a1 * lpf_x1R) + (l_a2 * lpf_x2R) - (l_b1 * lpf_y1R) - (l_b2 * lpf_y2R);
+    lp_R = (l_a0 * sR) + (l_a1 * lpf_x1R) + (l_a2 * lpf_x2R) - (l_b1 * lpf_y1R) - (l_b2 * lpf_y2R) + denorm;
     lpf_x2R = lpf_x1R; lpf_x1R = sR; lpf_y2R = lpf_y1R; lpf_y1R = lp_R; sR = lp_R;
   );
 );
@@ -586,8 +589,8 @@ xt_leak = last_xt_leak; // Init with previous held value
 (t_bypass == 0 && t_xtalk) ? (
     // Filter calc always runs for state continuity
     xt_mono = (sL + sR) * 0.5; 
-    xt_lp = xt_lp * 0.85 + xt_mono * 0.15; 
-    xt_hp = xt_hp * 0.98 + xt_lp * 0.02; 
+    xt_lp = xt_lp * 0.85 + xt_mono * 0.15 + denorm; 
+    xt_hp = xt_hp * 0.98 + xt_lp * 0.02 + denorm; 
     xt_final = xt_lp - xt_hp;
 
     // Smart Atomic Decimation for High Sample Rates
@@ -630,29 +633,29 @@ xt_leak = last_xt_leak; // Init with previous held value
   inL = (sL + lastL) * 0.5; inR = (sR + lastR) * 0.5;
 
   (flip == 0) ? (
-    istL_A1 = (istL_A1 * (1 - firstStage)) + (inL * firstStage); inL = istL_A1;
-    istL_A2 = (istL_A2 * (1 - iirAmount)) + (inL * iirAmount); inL = istL_A2;
-    istL_A3 = (istL_A3 * (1 - iirAmount)) + (inL * iirAmount); inputL = istL_A3;
+    istL_A1 = (istL_A1 * (1 - firstStage)) + (inL * firstStage) + denorm; inL = istL_A1;
+    istL_A2 = (istL_A2 * (1 - iirAmount)) + (inL * iirAmount) + denorm; inL = istL_A2;
+    istL_A3 = (istL_A3 * (1 - iirAmount)) + (inL * iirAmount) + denorm; inputL = istL_A3;
     sL = dryL - (inputL * s_analog); (sL - istL_A1 > slew_t) ? sL = istL_A1 + slew_t : (sL - istL_A1 < -slew_t) ? sL = istL_A1 - slew_t;
-    istR_A1 = (istR_A1 * (1 - firstStage)) + (inR * firstStage); inR = istR_A1;
-    istR_A2 = (istR_A2 * (1 - iirAmount)) + (inR * iirAmount); inR = istR_A2;
-    istR_A3 = (istR_A3 * (1 - iirAmount)) + (inR * iirAmount); inputR = istR_A3;
+    istR_A1 = (istR_A1 * (1 - firstStage)) + (inR * firstStage) + denorm; inR = istR_A1;
+    istR_A2 = (istR_A2 * (1 - iirAmount)) + (inR * iirAmount) + denorm; inR = istR_A2;
+    istR_A3 = (istR_A3 * (1 - iirAmount)) + (inR * iirAmount) + denorm; inputR = istR_A3;
     sR = dryR - (inputR * s_analog); (sR - istR_A1 > slew_t) ? sR = istR_A1 + slew_t : (sR - istR_A1 < -slew_t) ? sR = istR_A1 - slew_t;
   ) : (
-    istL_B1 = (istL_B1 * (1 - firstStage)) + (inL * firstStage); inL = istL_B1;
-    istL_B2 = (istL_B2 * (1 - iirAmount)) + (inL * iirAmount); inL = istL_B2;
-    istL_B3 = (istL_B3 * (1 - iirAmount)) + (inL * iirAmount); inputL = istL_B3;
+    istL_B1 = (istL_B1 * (1 - firstStage)) + (inL * firstStage) + denorm; inL = istL_B1;
+    istL_B2 = (istL_B2 * (1 - iirAmount)) + (inL * iirAmount) + denorm; inL = istL_B2;
+    istL_B3 = (istL_B3 * (1 - iirAmount)) + (inL * iirAmount) + denorm; inputL = istL_B3;
     sL = dryL - (inputL * s_analog); (sL - istL_B1 > slew_t) ? sL = istL_B1 + slew_t : (sL - istL_B1 < -slew_t) ? sL = istL_B1 - slew_t;
-    istR_B1 = (istR_B1 * (1 - firstStage)) + (inR * firstStage); inR = istR_B1;
-    istR_B2 = (istR_B2 * (1 - iirAmount)) + (inR * iirAmount); inR = istR_B2;
-    istR_B3 = (istR_B3 * (1 - iirAmount)) + (inR * iirAmount); inputR = istR_B3;
+    istR_B1 = (istR_B1 * (1 - firstStage)) + (inR * firstStage) + denorm; inR = istR_B1;
+    istR_B2 = (istR_B2 * (1 - iirAmount)) + (inR * iirAmount) + denorm; inR = istR_B2;
+    istR_B3 = (istR_B3 * (1 - iirAmount)) + (inR * iirAmount) + denorm; inputR = istR_B3;
     sR = dryR - (inputR * s_analog); (sR - istR_B1 > slew_t) ? sR = istR_B1 + slew_t : (sR - istR_B1 < -slew_t) ? sR = istR_B1 - slew_t;
   );
   flip = 1 - flip; lastL = sL; lastR = sR;
 
   absL = abs(sL); absR = abs(sR);
-  heatL = (absL > heatL) ? (absL * 0.05 + heatL * 0.95) : (heatL * thermal_rel + absL * (1 - thermal_rel));
-  heatR = (absR > heatR) ? (absR * 0.05 + heatR * 0.95) : (heatR * thermal_rel + absR * (1 - thermal_rel));
+  heatL = ((absL > heatL) ? (absL * 0.05 + heatL * 0.95) : (heatL * thermal_rel + absL * (1 - thermal_rel))) + denorm;
+  heatR = ((absR > heatR) ? (absR * 0.05 + heatR * 0.95) : (heatR * thermal_rel + absR * (1 - thermal_rel))) + denorm;
   bloomL = 1.0 + (heatL * s_thermal * (t_topo == 0 ? 0.5 : 0.6)); bloomR = 1.0 + (heatR * s_thermal * (t_topo == 0 ? 0.5 : 0.6));
   sL *= 0.618; sL_target = 1.0 - min(abs(sL), 0.999); (sL > 0.0) ? sL = -(exp(log(sL_target) * (1.618 * bloomL)) - 1) : sL = exp(log(1 + sL) * (1.618 * bloomL)) - 1;
   sR *= 0.618; sR_target = 1.0 - min(abs(sR), 0.999); (sR > 0.0) ? sR = -(exp(log(sR_target) * (1.618 * bloomR)) - 1) : sR = exp(log(1 + sR) * (1.618 * bloomR)) - 1;
@@ -667,7 +670,7 @@ xt_leak = last_xt_leak; // Init with previous held value
 );
 
 procL = sL * s_out; procR = sR * s_out;
-hpL = hpL * 0.9999 + procL * 0.0001; hpR = hpR * 0.9999 + procR * 0.0001;
+hpL = hpL * 0.9999 + procL * 0.0001 + denorm; hpR = hpR * 0.9999 + procR * 0.0001 + denorm;
 procL -= hpL; procR -= hpR;
 spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) + (rawR * (1 - s_bypass));
 
