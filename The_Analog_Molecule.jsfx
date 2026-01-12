@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.6.1
+// version: 2.6.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -116,13 +116,15 @@ update_filters();
 rail_loss = 1.0 - exp(-inv_srate / 0.025);
 
 instance_id = rand(1000000) + 1; 
+
+// SYNC INIT FIX: Track global state but DO NOT overwrite local sliders on load.
+// This ensures project-saved settings take precedence over an empty gmem.
 last_global_sync = gmem[0];
 last_global_bypass = gmem[7];
 last_global_xtalk = gmem[21];
 last_global_calib = gmem[22];
 last_global_xt_mode = gmem[23];
-// NEW: Global Engine Sync Tracker
-last_global_engine = gmem[24]; 
+last_global_engine = gmem[24];
 
 // Link System Trackers
 net_flux_mirror = 0;
@@ -533,16 +535,82 @@ block_duration = samplesblock * inv_srate;
 gmem[31] != last_h_tick ? ( has_master = 1; last_h_tick = gmem[31]; m_watchdog_time = 0; ) : ( m_watchdog_time += block_duration; m_watchdog_time > 0.5 ? has_master = 0; );
 t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); );
 
-gmem[7] != last_global_bypass ? ( t_bypass = gmem[7]; last_global_bypass = gmem[7]; slider_automate(t_bypass); );
-gmem[21] != last_global_xtalk ? ( t_xtalk = gmem[21]; last_global_xtalk = t_xtalk; slider_automate(t_xtalk); );
-gmem[23] != last_global_xt_mode ? ( t_topo != 2 ? ( t_xt_mode = gmem[23]; slider_automate(t_xt_mode); ); last_global_xt_mode = gmem[23]; );
-gmem[24] != last_global_engine ? ( t_engine_mode = gmem[24]; last_global_engine = t_engine_mode; slider_automate(t_engine_mode); );
+
+// --- UNIFIED GLOBAL SYNC (DEMOCRATIC BUS) ---
+// Prevents feedback loops and handles all sync in one place
+
+// Bypass Sync
+current_net_bypass = gmem[7];
+(current_net_bypass != last_global_bypass) ? (
+  t_bypass = current_net_bypass;
+  slider_automate(t_bypass);
+  last_global_bypass = current_net_bypass;
+) : (
+  (t_bypass != last_global_bypass) ? (
+    gmem[7] = t_bypass;
+    last_global_bypass = t_bypass;
+  );
+);
+
+// Crosstalk Sync
+current_net_xtalk = gmem[21];
+(current_net_xtalk != last_global_xtalk) ? (
+  t_xtalk = current_net_xtalk;
+  slider_automate(t_xtalk);
+  last_global_xtalk = current_net_xtalk;
+) : (
+  (t_xtalk != last_global_xtalk) ? (
+    gmem[21] = t_xtalk;
+    last_global_xtalk = t_xtalk;
+  );
+);
+
+// Calibration Sync
+current_net_calib = gmem[22];
+(current_net_calib != last_global_calib) ? (
+  t_calib_mode = current_net_calib;
+  slider_automate(t_calib_mode);
+  last_global_calib = current_net_calib;
+) : (
+  (t_calib_mode != last_global_calib) ? (
+    gmem[22] = t_calib_mode;
+    last_global_calib = t_calib_mode;
+  );
+);
+
+// Engine Mode Sync
+current_net_engine = gmem[24];
+(current_net_engine != last_global_engine) ? (
+  t_engine_mode = current_net_engine;
+  slider_automate(t_engine_mode);
+  last_global_engine = current_net_engine;
+) : (
+  (t_engine_mode != last_global_engine) ? (
+    gmem[24] = t_engine_mode;
+    last_global_engine = t_engine_mode;
+  );
+);
+
+// XT Mode Sync (Master Display Only, but Global Param)
+current_net_xt_mode = gmem[23];
+(current_net_xt_mode != last_global_xt_mode) ? (
+  t_xt_mode = current_net_xt_mode; 
+  // Only automate slider if we are master, or just keep it silent on channels
+  t_topo == 2 ? slider_automate(t_xt_mode);
+  last_global_xt_mode = current_net_xt_mode;
+) : (
+  (t_xt_mode != last_global_xt_mode) ? (
+    gmem[23] = t_xt_mode;
+    last_global_xt_mode = t_xt_mode;
+  );
+);
 
 target_xt_db = (t_xt_mode == 0) ? -75.0 : (t_xt_mode == 1) ? -95.0 : -115.0;
 xt_gain = 10^(target_xt_db/20);
 
-gmem[22] != last_global_calib ? ( 
-  t_calib_mode = gmem[22]; last_global_calib = t_calib_mode; slider_automate(t_calib_mode); 
+// RE-SYNC Offsets after potential update
+(t_calib_mode != last_local_calib_chk) ? (
+  last_local_calib_chk = t_calib_mode;
   t_topo == 1 ? topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; t_topo == 2 ? topo_offset = -8.0; t_topo == 0 ? topo_offset = 0.0;
   target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
 );
