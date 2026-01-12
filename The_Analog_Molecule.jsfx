@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.5
+// version: 2.5.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -108,7 +108,7 @@ smooth = exp(-inv_srate / 0.045);
 thermal_rel = exp(-inv_srate / 2.5);
 
 // --- DENORMAL PROTECTION CONSTANT ---
-denorm = 10 ^ -30;
+denorm = pow(10, -30);
 
 update_filters();
 
