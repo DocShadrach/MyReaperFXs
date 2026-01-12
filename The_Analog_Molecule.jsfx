@@ -480,7 +480,7 @@ last_link_state = t_link_on;
        ) : net_flavor == 4 ? ( // Modern
          t_topo == 0 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 && t_calib_mode==1 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode=2 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode==2 ? chk_match=1; );
        );
        
        chk_match == 0 ? perform_load = 0;
