@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="20f55e7f821ff885b71ffab5b563e1950661dacd">
+<index version="1" name="DocShadrach FXs" commit="d89f82d799d4084ec150536f1452da5f2b53281e">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -299,6 +299,10 @@ Professional 180-Channel 3D Console Emulator.
     <version name="2.6.0" author="Doc Shadrach" time="2026-01-12T09:00:00Z">
      <changelog><![CDATA[BUG FIX. Fixed the logic of the preset system that caused the crosstalk to trigger on its own when it was OFF.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/20f55e7f821ff885b71ffab5b563e1950661dacd/The_Analog_Molecule.jsfx</source>
+    </version>
+    <version name="2.6.1" author="Doc Shadrach" time="2026-01-12T11:00:00Z">
+     <changelog><![CDATA[BUG FIX. Several conflicts that caused things to turn on and off by themselves have been fixed.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/d89f82d799d4084ec150536f1452da5f2b53281e/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
 
