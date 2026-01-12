@@ -1,6 +1,6 @@
 desc: The SSL-Style Ch Comp (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0
+// version: 1.0.1
 // about:
 //   A faithful emulation of the classic British 4000-series console channel dynamics.
 //   This processor features a VCA-style compression characteristic with program-dependent
@@ -42,7 +42,7 @@ gfx_ext_retina = 1;
 // DSP Constants
 log2db = 8.68588963806;
 db2log = 0.11512925464970228; 
-denorm = 10^-24; // Anti-denormalization noise floor
+denorm = pow(10, -30);
 
 // --- PHYSICS CONSTANTS ---
 slew_ref_per_sec = 13000000 * 0.15; // Reference slew rate for OpAmp model
