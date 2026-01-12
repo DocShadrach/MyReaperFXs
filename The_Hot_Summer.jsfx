@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.8
+// version: 1.8.1
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -66,8 +66,8 @@ log2_inv = 1 / log(2);
 dith_const = 1.1 * pow(10, -44); 
 half_pi = 1.57079632679;
 fade_smooth = exp(-inv_srate / 0.005); 
-// MOD v1.8: Updated to Additive Standard
-denorm = 10 ^ -30;
+// MOD v1.8.1: Corrected formula
+denorm = pow(10, -30);
 
 c2_iir_val = 0.0015 * (48000.0 * inv_srate);
 led_thresh = 0.0000316;
