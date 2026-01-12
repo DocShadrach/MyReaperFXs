@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.5.1
+// version: 2.6
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -332,10 +332,16 @@ t_topo != last_topo ? (
   force_refresh = 1;
 );
 
-gmem[7] = t_bypass;
-gmem[21] = t_xtalk; 
-gmem[22] = t_calib_mode; 
-t_topo == 2 ? ( gmem[23] = t_xt_mode; );
+t_bypass != last_global_bypass ? gmem[7] = t_bypass;
+
+// FIXED: Only MASTER (topo 2) can auto-broadcast XTALK change (and only if not loading preset)
+// Channels/Bus must rely on UI button or Network Receive to change state.
+(t_topo == 2 && loading_preset == 0 && t_xtalk != last_global_xtalk) ? (
+  gmem[21] = t_xtalk; 
+);
+
+t_calib_mode != last_global_calib ? gmem[22] = t_calib_mode; 
+t_topo == 2 ? ( t_xt_mode != gmem[23] ? gmem[23] = t_xt_mode; );
 
 last_global_bypass = t_bypass;
 last_global_xtalk = t_xtalk;
@@ -474,7 +480,7 @@ last_link_state = t_link_on;
        ) : net_flavor == 4 ? ( // Modern
          t_topo == 0 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 && t_calib_mode==1 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode==2 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode=2 ? chk_match=1; );
        );
        
        chk_match == 0 ? perform_load = 0;
