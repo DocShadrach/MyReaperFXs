@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.6
+// version: 2.6.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -197,29 +197,30 @@ function load_flavor(flavor_id) (
   flavor_id == 1 ? ( // British Class A
     topo_bias = 0.15; topo_core = 0.3; topo_drive_push = 1.1; 
     t_topo == 0 ? ( t_flux=35; t_thermal=40; t_analog=25; );
-    t_topo == 1 ? ( t_flux=25; t_thermal=50; t_analog=30; t_calib_mode=0; );
+    t_topo == 1 ? ( t_flux=25; t_thermal=50; t_analog=30; );
     t_topo == 2 ? ( t_flux=15; t_thermal=30; t_analog=20; t_xt_mode=0; );
   ) : flavor_id == 2 ? ( // Solid State E
     topo_bias = 0.0; topo_core = 0.05; topo_drive_push = 1.25; 
     t_topo == 0 ? ( t_flux=20; t_thermal=20; t_analog=15; );
-    t_topo == 1 ? ( t_flux=15; t_thermal=35; t_analog=20; t_calib_mode=1; );
+    t_topo == 1 ? ( t_flux=15; t_thermal=35; t_analog=20; );
     t_topo == 2 ? ( t_flux=10; t_thermal=20; t_analog=12; t_xt_mode=1; );
   ) : flavor_id == 3 ? ( // US Discrete
     topo_bias = 0.05; topo_core = 0.15; topo_drive_push = 1.15; 
     t_topo == 0 ? ( t_flux=10; t_thermal=10; t_analog=10; );
-    t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; t_calib_mode=0; );
+    t_topo == 1 ? ( t_flux=10; t_thermal=15; t_analog=12; );
     t_topo == 2 ? ( t_flux=5; t_thermal=10; t_analog=8; t_xt_mode=0; );
   ) : flavor_id == 4 ? ( // Modern
     topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; 
     t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
-    t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; t_calib_mode=1; );
+    t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
   ) : ( // Custom
     topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
   );
 
   slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog); 
-  slider_automate(t_calib_mode); slider_automate(t_xt_mode);
+  // REMOVED: slider_automate(t_calib_mode); 
+  slider_automate(t_xt_mode);
   
   last_flux_int = to_int(t_flux);
   last_thermal_int = to_int(t_thermal);
@@ -248,8 +249,8 @@ cur_flux_int = to_int(t_flux);
 cur_thermal_int = to_int(t_thermal);
 cur_analog_int = to_int(t_analog);
 
-// PUSH LOCAL ENGINE CHANGE TO GLOBAL
-gmem[24] = t_engine_mode;
+// PUSH LOCAL ENGINE CHANGE TO GLOBAL -> MOVED DOWN TO PROTECTED BLOCK
+// gmem[24] = t_engine_mode;
 
 // DIRTY STATE CHECK (PROTECTED)
 p_init_lock == 1 ? (
@@ -275,28 +276,28 @@ p_init_lock == 1 ? (
      // British (1)
      match = 0;
      t_topo == 0 ? ( c_flx==35 && c_thm==40 && c_ana==25 ? match=1; );
-     t_topo == 1 ? ( c_flx==25 && c_thm==50 && c_ana==30 && t_calib_mode==0 ? match=1; );
+     t_topo == 1 ? ( c_flx==25 && c_thm==50 && c_ana==30 ? match=1; );
      t_topo == 2 ? ( c_flx==15 && c_thm==30 && c_ana==20 && t_xt_mode==0 ? match=1; );
      match ? match_flv = 1;
      
      // Solid State E (2)
      match = 0;
      t_topo == 0 ? ( c_flx==20 && c_thm==20 && c_ana==15 ? match=1; );
-     t_topo == 1 ? ( c_flx==15 && c_thm==35 && c_ana==20 && t_calib_mode==1 ? match=1; );
+     t_topo == 1 ? ( c_flx==15 && c_thm==35 && c_ana==20 ? match=1; );
      t_topo == 2 ? ( c_flx==10 && c_thm==20 && c_ana==12 && t_xt_mode==1 ? match=1; );
      match ? match_flv = 2;
 
      // US Discrete (3)
      match = 0;
      t_topo == 0 ? ( c_flx==10 && c_thm==10 && c_ana==10 ? match=1; );
-     t_topo == 1 ? ( c_flx==10 && c_thm==15 && c_ana==12 && t_calib_mode==0 ? match=1; );
+     t_topo == 1 ? ( c_flx==10 && c_thm==15 && c_ana==12 ? match=1; );
      t_topo == 2 ? ( c_flx==5 && c_thm==10 && c_ana==8 && t_xt_mode==0 ? match=1; );
      match ? match_flv = 3;
 
      // Modern (4)
      match = 0;
      t_topo == 0 ? ( c_flx==5 && c_thm==5 && c_ana==5 ? match=1; );
-     t_topo == 1 ? ( c_flx==5 && c_thm==5 && c_ana==5 && t_calib_mode==1 ? match=1; );
+     t_topo == 1 ? ( c_flx==5 && c_thm==5 && c_ana==5 ? match=1; );
      t_topo == 2 ? ( c_flx==2 && c_thm==5 && c_ana==2 && t_xt_mode=2 ? match=1; );
      match ? match_flv = 4;
      
@@ -334,19 +335,22 @@ t_topo != last_topo ? (
 
 t_bypass != last_global_bypass ? gmem[7] = t_bypass;
 
-// FIXED: Only MASTER (topo 2) can auto-broadcast XTALK change (and only if not loading preset)
+// FIXED: Only MASTER (topo 2) can auto-broadcast XTALK, BYPASS, CALIB, and ENGINE
 // Channels/Bus must rely on UI button or Network Receive to change state.
-(t_topo == 2 && loading_preset == 0 && t_xtalk != last_global_xtalk) ? (
-  gmem[21] = t_xtalk; 
+(t_topo == 2 && loading_preset == 0) ? (
+  t_xtalk != last_global_xtalk ? gmem[21] = t_xtalk;
+  t_bypass != last_global_bypass ? gmem[7] = t_bypass;
+  t_calib_mode != last_global_calib ? gmem[22] = t_calib_mode; 
+  t_engine_mode != last_global_engine ? gmem[24] = t_engine_mode;
 );
 
-t_calib_mode != last_global_calib ? gmem[22] = t_calib_mode; 
 t_topo == 2 ? ( t_xt_mode != gmem[23] ? gmem[23] = t_xt_mode; );
 
 last_global_bypass = t_bypass;
 last_global_xtalk = t_xtalk;
 last_global_calib = t_calib_mode;
 last_global_xt_mode = gmem[23];
+last_global_engine = t_engine_mode; // Update local tracker
 
 unit_seed = t_id / 180;
 cluster_id = floor((t_id - 1) / 18); 
@@ -467,20 +471,20 @@ last_link_state = t_link_on;
        
        net_flavor == 1 ? ( // British Class A
          t_topo == 0 ? ( b_flx==35 && b_thm==40 && b_ana==25 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==25 && b_thm==50 && b_ana==30 && t_calib_mode==0 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==25 && b_thm==50 && b_ana==30 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==15 && b_thm==30 && b_ana==20 && t_xt_mode==0 ? chk_match=1; );
        ) : net_flavor == 2 ? ( // Solid State E
          t_topo == 0 ? ( b_flx==20 && b_thm==20 && b_ana==15 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==15 && b_thm==35 && b_ana==20 && t_calib_mode==1 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==15 && b_thm==35 && b_ana==20 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==10 && b_thm==20 && b_ana==12 && t_xt_mode==1 ? chk_match=1; );
        ) : net_flavor == 3 ? ( // US Discrete
          t_topo == 0 ? ( b_flx==10 && b_thm==10 && b_ana==10 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==10 && b_thm==15 && b_ana==12 && t_calib_mode==0 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==10 && b_thm==15 && b_ana==12 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==5 && b_thm==10 && b_ana==8 && t_xt_mode==0 ? chk_match=1; );
        ) : net_flavor == 4 ? ( // Modern
          t_topo == 0 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 && t_calib_mode==1 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode==2 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode=2 ? chk_match=1; );
        );
        
        chk_match == 0 ? perform_load = 0;
