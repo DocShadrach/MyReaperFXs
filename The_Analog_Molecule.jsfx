@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.6.2
+// version: 2.6.3
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -117,14 +117,15 @@ rail_loss = 1.0 - exp(-inv_srate / 0.025);
 
 instance_id = rand(1000000) + 1; 
 
-// SYNC INIT FIX: Track global state but DO NOT overwrite local sliders on load.
-// This ensures project-saved settings take precedence over an empty gmem.
-last_global_sync = gmem[0];
-last_global_bypass = gmem[7];
-last_global_xtalk = gmem[21];
-last_global_calib = gmem[22];
-last_global_xt_mode = gmem[23];
-last_global_engine = gmem[24];
+// SYNC INIT v2.6.7: Force Local Values as "Last Known" to prevent zero-reset
+last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
+last_net_xtalk = t_xtalk;   last_loc_xtalk = t_xtalk;
+last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
+last_net_engine = t_engine_mode; last_loc_engine = t_engine_mode;
+last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
+
+// STARTUP LOCK TIMER
+startup_lock = 0;
 
 // Link System Trackers
 net_flux_mirror = 0;
@@ -335,24 +336,7 @@ t_topo != last_topo ? (
   force_refresh = 1;
 );
 
-t_bypass != last_global_bypass ? gmem[7] = t_bypass;
-
-// FIXED: Only MASTER (topo 2) can auto-broadcast XTALK, BYPASS, CALIB, and ENGINE
-// Channels/Bus must rely on UI button or Network Receive to change state.
-(t_topo == 2 && loading_preset == 0) ? (
-  t_xtalk != last_global_xtalk ? gmem[21] = t_xtalk;
-  t_bypass != last_global_bypass ? gmem[7] = t_bypass;
-  t_calib_mode != last_global_calib ? gmem[22] = t_calib_mode; 
-  t_engine_mode != last_global_engine ? gmem[24] = t_engine_mode;
-);
-
-t_topo == 2 ? ( t_xt_mode != gmem[23] ? gmem[23] = t_xt_mode; );
-
-last_global_bypass = t_bypass;
-last_global_xtalk = t_xtalk;
-last_global_calib = t_calib_mode;
-last_global_xt_mode = gmem[23];
-last_global_engine = t_engine_mode; // Update local tracker
+// BYPASS / SYNC LOGIC MOVED TO @BLOCK SECTION TO PREVENT FEEDBACK LOOPS
 
 unit_seed = t_id / 180;
 cluster_id = floor((t_id - 1) / 18); 
@@ -372,7 +356,9 @@ s_init_done == 0 ? (
   t_topo < 2 ? (
     my_slot = atomic_add(gmem[1], 1); 
     t_id = ((my_slot * 37) % 180) + 1; 
-  ) : ( t_id = 1; );
+  ) : ( 
+    t_id = 1; 
+  );
   slider_automate(t_id); 
   unit_seed = t_id / 180;
   cluster_id = floor((t_id - 1) / 18);
@@ -536,73 +522,90 @@ gmem[31] != last_h_tick ? ( has_master = 1; last_h_tick = gmem[31]; m_watchdog_t
 t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); );
 
 
-// --- UNIFIED GLOBAL SYNC (DEMOCRATIC BUS) ---
-// Prevents feedback loops and handles all sync in one place
-
-// Bypass Sync
-current_net_bypass = gmem[7];
-(current_net_bypass != last_global_bypass) ? (
-  t_bypass = current_net_bypass;
-  slider_automate(t_bypass);
-  last_global_bypass = current_net_bypass;
+// --- UNIFIED GLOBAL SYNC (DOUBLE TRACKER + WARMUP LOCK) v2.6.7 ---
+// WARM-UP PHASE: For the first ~0.5s (30 blocks), LOCK the read logic.
+// Master FORCES saved values to network. Channel WAITS.
+startup_lock < 30 ? (
+   startup_lock += 1;
+   
+   t_topo == 2 ? (
+      // MASTER MODE: Aggressively broadcast saved state to network
+      gmem[7] = t_bypass; gmem[21] = t_xtalk; gmem[22] = t_calib_mode;
+      gmem[23] = t_xt_mode; gmem[24] = t_engine_mode;
+      
+      // Sync trackers to avoid jump after unlock
+      last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
+      last_net_xtalk = t_xtalk; last_loc_xtalk = t_xtalk;
+      last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
+      last_net_engine = t_engine_mode; last_loc_engine = t_engine_mode;
+      last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
+   ) : (
+      // CHANNEL MODE: Do NOT read network yet (it might be empty/zero).
+      // Just keep local trackers ready.
+      last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
+      last_net_xtalk = t_xtalk; last_loc_xtalk = t_xtalk;
+      last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
+      last_net_engine = t_engine_mode; last_loc_engine = t_engine_mode;
+      last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
+   );
 ) : (
-  (t_bypass != last_global_bypass) ? (
-    gmem[7] = t_bypass;
-    last_global_bypass = t_bypass;
-  );
-);
+    // NORMAL OPERATION (Democratic Bus) - Enabled after warm-up
+    
+    // Bypass Sync
+    current_net_bypass = gmem[7];
+    (current_net_bypass != last_net_bypass) ? (
+      t_bypass = current_net_bypass; slider_automate(t_bypass);
+      last_net_bypass = current_net_bypass; last_loc_bypass = t_bypass;
+    ) : (
+      (t_bypass != last_loc_bypass) ? (
+        gmem[7] = t_bypass; last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
+      );
+    );
 
-// Crosstalk Sync
-current_net_xtalk = gmem[21];
-(current_net_xtalk != last_global_xtalk) ? (
-  t_xtalk = current_net_xtalk;
-  slider_automate(t_xtalk);
-  last_global_xtalk = current_net_xtalk;
-) : (
-  (t_xtalk != last_global_xtalk) ? (
-    gmem[21] = t_xtalk;
-    last_global_xtalk = t_xtalk;
-  );
-);
+    // Crosstalk Sync
+    current_net_xtalk = gmem[21];
+    (current_net_xtalk != last_net_xtalk) ? (
+      t_xtalk = current_net_xtalk; slider_automate(t_xtalk);
+      last_net_xtalk = current_net_xtalk; last_loc_xtalk = t_xtalk;
+    ) : (
+      (t_xtalk != last_loc_xtalk) ? (
+        gmem[21] = t_xtalk; last_net_xtalk = t_xtalk; last_loc_xtalk = t_xtalk;
+      );
+    );
 
-// Calibration Sync
-current_net_calib = gmem[22];
-(current_net_calib != last_global_calib) ? (
-  t_calib_mode = current_net_calib;
-  slider_automate(t_calib_mode);
-  last_global_calib = current_net_calib;
-) : (
-  (t_calib_mode != last_global_calib) ? (
-    gmem[22] = t_calib_mode;
-    last_global_calib = t_calib_mode;
-  );
-);
+    // Calibration Sync
+    current_net_calib = gmem[22];
+    (current_net_calib != last_net_calib) ? (
+      t_calib_mode = current_net_calib; slider_automate(t_calib_mode);
+      last_net_calib = current_net_calib; last_loc_calib = t_calib_mode;
+    ) : (
+      (t_calib_mode != last_loc_calib) ? (
+        gmem[22] = t_calib_mode; last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
+      );
+    );
 
-// Engine Mode Sync
-current_net_engine = gmem[24];
-(current_net_engine != last_global_engine) ? (
-  t_engine_mode = current_net_engine;
-  slider_automate(t_engine_mode);
-  last_global_engine = current_net_engine;
-) : (
-  (t_engine_mode != last_global_engine) ? (
-    gmem[24] = t_engine_mode;
-    last_global_engine = t_engine_mode;
-  );
-);
+    // Engine Mode Sync
+    current_net_engine = gmem[24];
+    (current_net_engine != last_net_engine) ? (
+      t_engine_mode = current_net_engine; slider_automate(t_engine_mode);
+      last_net_engine = current_net_engine; last_loc_engine = t_engine_mode;
+    ) : (
+      (t_engine_mode != last_loc_engine) ? (
+        gmem[24] = t_engine_mode; last_net_engine = t_engine_mode; last_loc_engine = t_engine_mode;
+      );
+    );
 
-// XT Mode Sync (Master Display Only, but Global Param)
-current_net_xt_mode = gmem[23];
-(current_net_xt_mode != last_global_xt_mode) ? (
-  t_xt_mode = current_net_xt_mode; 
-  // Only automate slider if we are master, or just keep it silent on channels
-  t_topo == 2 ? slider_automate(t_xt_mode);
-  last_global_xt_mode = current_net_xt_mode;
-) : (
-  (t_xt_mode != last_global_xt_mode) ? (
-    gmem[23] = t_xt_mode;
-    last_global_xt_mode = t_xt_mode;
-  );
+    // XT Mode Sync
+    current_net_xt_mode = gmem[23];
+    (current_net_xt_mode != last_net_xt_mode) ? (
+      t_xt_mode = current_net_xt_mode; 
+      t_topo == 2 ? slider_automate(t_xt_mode);
+      last_net_xt_mode = current_net_xt_mode; last_loc_xt_mode = t_xt_mode;
+    ) : (
+      (t_xt_mode != last_loc_xt_mode) ? (
+        gmem[23] = t_xt_mode; last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
+      );
+    );
 );
 
 target_xt_db = (t_xt_mode == 0) ? -75.0 : (t_xt_mode == 1) ? -95.0 : -115.0;
