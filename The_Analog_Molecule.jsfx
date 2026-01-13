@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.6.3
+// version: 2.7
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -177,10 +177,12 @@ lpf_x1R=0; lpf_x2R=0; lpf_y1R=0; lpf_y2R=0;
 // Update tracking for filters
 last_hpf = -1; last_lpf = -1; last_filt_state = -1;
 
-// MEMORY MAP CONSTANTS
+// MEMORY MAP CONSTANTS & OPTIMIZATIONS
 PTR_BANK = 15;      
 BANK_A_OFFSET = 200; 
-BANK_B_OFFSET = 300; 
+// OPTIMIZATION: Memory Padding for False Sharing (Cache Line Protection)
+CLUSTER_STRIDE = 16; // 16 slots = 128 bytes separation
+BANK_STRIDE = 400;   // Increased bank spacing to accommodate stride
 
 // SAFETY INITIALIZATION
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
@@ -661,7 +663,8 @@ meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_i
 g_clock += 1;
 t_topo == 2 && (g_clock > 128) ? ( 
   g_clock = 0; current_read = gmem[PTR_BANK]; next_read = 1 - current_read; 
-  xi = 0; loop(10, gmem[BANK_A_OFFSET + xi + (next_read * 100)] = 0; xi += 1; );
+  // OPTIMIZED CLEAR LOOP: Respects Cluster Stride + Bank Stride
+  xi = 0; loop(10, gmem[BANK_A_OFFSET + (xi * CLUSTER_STRIDE) + (next_read * BANK_STRIDE)] = 0; xi += 1; );
   gmem[PTR_BANK] = next_read;
 );
 
@@ -682,9 +685,10 @@ xt_leak = last_xt_leak; // Init with previous held value
     );
 
     run_atomic ? (
-        read_bank_offset = gmem[PTR_BANK] * 100; write_bank_offset = (1 - gmem[PTR_BANK]) * 100; 
-        atomic_add(gmem[BANK_A_OFFSET + cluster_id + write_bank_offset], xt_final);
-        xt_sum = gmem[BANK_A_OFFSET + cluster_id + read_bank_offset]; 
+        read_bank_offset = gmem[PTR_BANK] * BANK_STRIDE; write_bank_offset = (1 - gmem[PTR_BANK]) * BANK_STRIDE; 
+        // OPTIMIZED ATOMIC ADD: Uses Cluster Stride to prevent Cache False Sharing
+        atomic_add(gmem[BANK_A_OFFSET + (cluster_id * CLUSTER_STRIDE) + write_bank_offset], xt_final);
+        xt_sum = gmem[BANK_A_OFFSET + (cluster_id * CLUSTER_STRIDE) + read_bank_offset]; 
         xt_leak = (xt_sum - xt_final) * xt_gain;
         last_xt_leak = xt_leak; // Store for interpolation/hold
     );
