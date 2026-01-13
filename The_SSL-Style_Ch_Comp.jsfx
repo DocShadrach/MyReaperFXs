@@ -1,6 +1,6 @@
 desc: The SSL-Style Ch Comp (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0.1
+// version: 1.0.2
 // about:
 //   A faithful emulation of the classic British 4000-series console channel dynamics.
 //   This processor features a VCA-style compression characteristic with program-dependent
@@ -33,6 +33,11 @@ slider11:0<0,1,1{Off,On}>Sidechain HPF
 slider12:0<0,1,1{Active,Bypassed}>Soft Bypass
 slider13:0<0,1,1{Unlinked,Linked}>I/O Link
 slider14:0<0,1,1{Dual Mono,Stereo Link}>Detector Link
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
 
 @init
 // --- GLOBAL INITIALIZATION ---
