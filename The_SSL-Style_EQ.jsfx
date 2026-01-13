@@ -1,6 +1,6 @@
 desc: The SSL-Style EQ (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0
+// version: 1.0.1
 // about: Equalizer based on the curves and behavior of the SSL 4000 E/G Series.
 // 
 // This plugin uses some DSP algorithms by Chris Johnson (Airwindows).
@@ -44,6 +44,11 @@ slider42:0<0,1,1{Shelf,Bell}>HF Shape
 slider50:0<-12,12,0.01>Output Trim (dB)
 slider51:0<0,1,1{Off,On}>Bypass Plugin
 slider52:0<0,1,1{Off,On}>I/O Link
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
 
 // ----------------------------------------------------------------------
 // 2. INITIALIZATION & MEMORY
