@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="e84f660fce25283b094fd0d0b97b92cd83e0a9ff">
+<index version="1" name="DocShadrach FXs" commit="e2b04669fc06f96c7c4724774a1310229f95ba89">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -311,6 +311,10 @@ Professional 180-Channel 3D Console Emulator.
     <version name="2.7.0" author="Doc Shadrach" time="2026-01-13T07:00:00Z">
      <changelog><![CDATA[Attempting to improve xtalk's performance on modern CPUs.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/e84f660fce25283b094fd0d0b97b92cd83e0a9ff/The_Analog_Molecule.jsfx</source>
+    </version>
+    <version name="2.8.0" author="Doc Shadrach" time="2026-01-13T09:00:00Z">
+     <changelog><![CDATA[Another optimization that now makes it perform better.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/e2b04669fc06f96c7c4724774a1310229f95ba89/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
 
