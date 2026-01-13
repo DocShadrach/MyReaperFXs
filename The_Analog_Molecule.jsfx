@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.7
+// version: 2.8
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -180,9 +180,17 @@ last_hpf = -1; last_lpf = -1; last_filt_state = -1;
 // MEMORY MAP CONSTANTS & OPTIMIZATIONS
 PTR_BANK = 15;      
 BANK_A_OFFSET = 200; 
-// OPTIMIZATION: Memory Padding for False Sharing (Cache Line Protection)
+// OPTIMIZATION A: Memory Padding for False Sharing (Cache Line Protection)
 CLUSTER_STRIDE = 16; // 16 slots = 128 bytes separation
 BANK_STRIDE = 400;   // Increased bank spacing to accommodate stride
+
+// OPTIMIZATION B: Batch Processing Config
+XT_BATCH = 16;       // Process global RAM only once every 16 samples
+xt_accum = 0;        // Local accumulator
+xt_cnt = 0;          // Batch counter
+xt_smooth = exp(-1/(srate*0.005)); // 5ms smoothing for batch updates
+current_leak_val = 0;
+target_leak_val = 0;
 
 // SAFETY INITIALIZATION
 (gmem[PTR_BANK] < 0 || gmem[PTR_BANK] > 1) ? gmem[PTR_BANK] = 0;
@@ -455,7 +463,7 @@ last_link_state = t_link_on;
     // --- SAFETY CHECK FOR RESET / STOP-PLAY ---
     // Ensure we don't blindly load a flavor if local parameters don't match it
     perform_load = 1;
-    (my_flavor_cmd == 0 && net_flavor > 0) ? (
+    (my_flavor_cmd == 0 && net_flavor > 0 && startup_lock < 30) ? (
        chk_match = 0;
        b_flx = to_int(t_flux); b_thm = to_int(t_thermal); b_ana = to_int(t_analog);
        
@@ -626,6 +634,25 @@ topology_interstage = t_topo == 0 ? 1.0 : 0.85; topology_flux_depth = t_topo == 
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
 energy_accum = 0; t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); ); rail_target = gmem[10];
 
+// --- MASTER CLEAR LOGIC MOVED TO @BLOCK FOR SAFETY ---
+// This ensures memory is cleared BEFORE samples start, preventing infinite rise
+t_topo == 2 ? ( 
+  // Swap Banks
+  current_read = gmem[PTR_BANK]; 
+  next_read = 1 - current_read; 
+  gmem[PTR_BANK] = next_read;
+  
+  // Clear the NEW write buffer (which was the old read buffer)
+  // We use the same Stride/Offset logic to ensure we hit exactly the slots used by channels
+  // Clearing 10 clusters (or more if expanded)
+  clr_base = BANK_A_OFFSET + (current_read * BANK_STRIDE); // The buffer we are about to write to
+  xi = 0; 
+  loop(18, // Safety margin: Clear a bit more than 10 to be safe
+      gmem[clr_base + (xi * CLUSTER_STRIDE)] = 0; 
+      xi += 1; 
+  );
+);
+
 @sample
 rawL = spl0; rawR = spl1;
 s_flux = s_flux * smooth + target_flux * (1 - smooth);
@@ -660,16 +687,7 @@ dryL = sL; dryR = sR;
 peak = max(abs(sL), abs(sR));
 meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_input * 0.9992 + peak * 0.0008);
 
-g_clock += 1;
-t_topo == 2 && (g_clock > 128) ? ( 
-  g_clock = 0; current_read = gmem[PTR_BANK]; next_read = 1 - current_read; 
-  // OPTIMIZED CLEAR LOOP: Respects Cluster Stride + Bank Stride
-  xi = 0; loop(10, gmem[BANK_A_OFFSET + (xi * CLUSTER_STRIDE) + (next_read * BANK_STRIDE)] = 0; xi += 1; );
-  gmem[PTR_BANK] = next_read;
-);
-
-// --- NEW CROSSTALK ENGINE (Smart Refresh Rate) ---
-xt_leak = last_xt_leak; // Init with previous held value
+// --- NEW CROSSTALK ENGINE (Batch Optimized) ---
 (t_bypass == 0 && t_xtalk) ? (
     // Filter calc always runs for state continuity
     xt_mono = (sL + sR) * 0.5; 
@@ -677,25 +695,49 @@ xt_leak = last_xt_leak; // Init with previous held value
     xt_hp = xt_hp * 0.98 + xt_lp * 0.02 + denorm; 
     xt_final = xt_lp - xt_hp;
 
-    // Smart Atomic Decimation for High Sample Rates
-    run_atomic = 1;
-    (srate > 60000) ? (
-        xt_tick = (xt_tick + 1) & 1;
-        run_atomic = (xt_tick == 0);
+    // OPTIMIZATION B: Accumulate locally
+    xt_accum += xt_final;
+    xt_cnt += 1;
+
+    // Only hit global memory once every XT_BATCH samples (e.g. 16)
+    (xt_cnt >= XT_BATCH) ? (
+        // Calculate Pointers based on the bank selected by Master in @block
+        // read_bank is what Master set as 'current_read' (PTR_BANK)
+        // write_bank is the other one
+        read_bank_idx = gmem[PTR_BANK];
+        write_bank_idx = 1 - read_bank_idx;
+        
+        read_offset = read_bank_idx * BANK_STRIDE; 
+        write_offset = write_bank_idx * BANK_STRIDE; 
+        
+        cluster_base = cluster_id * CLUSTER_STRIDE;
+
+        // Atomic Add the accumulated sum (One atomic op instead of 16)
+        atomic_add(gmem[BANK_A_OFFSET + cluster_base + write_offset], xt_accum);
+        
+        // Read the sum from the active read buffer
+        xt_sum = gmem[BANK_A_OFFSET + cluster_base + read_offset]; 
+        
+        // Calculate Target Leak
+        // Note: we don't subtract xt_accum because we are reading from the 'finished' bank
+        // which contains the sum of everyone from the *previous* batch cycle.
+        // This is standard double-buffer logic.
+        target_leak_val = xt_sum * xt_gain;
+        
+        // Reset local accumulators
+        xt_accum = 0;
+        xt_cnt = 0;
     );
 
-    run_atomic ? (
-        read_bank_offset = gmem[PTR_BANK] * BANK_STRIDE; write_bank_offset = (1 - gmem[PTR_BANK]) * BANK_STRIDE; 
-        // OPTIMIZED ATOMIC ADD: Uses Cluster Stride to prevent Cache False Sharing
-        atomic_add(gmem[BANK_A_OFFSET + (cluster_id * CLUSTER_STRIDE) + write_bank_offset], xt_final);
-        xt_sum = gmem[BANK_A_OFFSET + (cluster_id * CLUSTER_STRIDE) + read_bank_offset]; 
-        xt_leak = (xt_sum - xt_final) * xt_gain;
-        last_xt_leak = xt_leak; // Store for interpolation/hold
-    );
-    sL += xt_leak * s_bypass; sR += xt_leak * s_bypass;
+    // Smooth Interpolation to prevent zipper noise due to batching
+    current_leak_val = current_leak_val * xt_smooth + target_leak_val * (1.0 - xt_smooth);
+    
+    sL += current_leak_val * s_bypass; 
+    sR += current_leak_val * s_bypass;
 ) : (
-    last_xt_leak = 0; // Reset if bypassed
     xt_leak = 0;
+    xt_accum = 0;
+    current_leak_val = 0;
 );
 // -------------------------------------------------
   
