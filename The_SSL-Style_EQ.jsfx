@@ -1,6 +1,6 @@
 desc: The SSL-Style EQ (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0.1
+// version: 1.1
 // about: Equalizer based on the curves and behavior of the SSL 4000 E/G Series.
 // 
 // This plugin uses some DSP algorithms by Chris Johnson (Airwindows).
@@ -188,16 +188,32 @@ function update_filters()
     // Biquad for GUI only
     calc_filter(lf_bell ? 0 : 1, lf_freq, lf_q, lf_gain); lf_a1=a1; lf_a2=a2; lf_b0=b0; lf_b1=b1; lf_b2=b2;
 
+    // --- LMF CALCULATION (Modified for E-Series Behavior) ---
     lmf_freq=slider20; lmf_gain=slider21; lmf_q_base=slider22; lmf_q = lmf_q_base;
-    model_g ? ( lmf_q = lmf_q_base * (1 + abs(lmf_gain) * 0.2); ); 
+    model_g ? ( 
+        // G-Series: Proportional Q (Strong)
+        lmf_q = lmf_q_base * (1 + abs(lmf_gain) * 0.2); 
+    ) : (
+        // E-Series: Analog Proportional Q
+        lmf_q = lmf_q_base * (0.5 + abs(lmf_gain) * 0.05);
+    );
+
     lmf_g_coeff = tan($pi * lmf_freq / srate); lmf_k_coeff = 1/lmf_q;
     lmf_a1_svf = 1 / (1 + lmf_g_coeff * (lmf_g_coeff + lmf_k_coeff)); lmf_a2_svf = lmf_g_coeff * lmf_a1_svf;
     lmf_gain_mod = (10 ^ (lmf_gain / 20)) - 1;
     // Biquad for GUI only
     calc_filter(0, lmf_freq, lmf_q, lmf_gain); lmf_a1=a1; lmf_a2=a2; lmf_b0=b0; lmf_b1=b1; lmf_b2=b2;
 
+    // --- HMF CALCULATION (Modified for E-Series Behavior) ---
     hmf_freq=slider30; hmf_gain=slider31; hmf_q_base=slider32; hmf_q = hmf_q_base;
-    model_g ? ( hmf_q = hmf_q_base * (1 + abs(hmf_gain) * 0.2); ); 
+    model_g ? ( 
+        // G-Series: Proportional Q (Strong)
+        hmf_q = hmf_q_base * (1 + abs(hmf_gain) * 0.2); 
+    ) : (
+        // E-Series: Analog Proportional Q
+        hmf_q = hmf_q_base * (0.5 + abs(hmf_gain) * 0.05);
+    );
+
     hmf_g_coeff = tan($pi * hmf_freq / srate); hmf_k_coeff = 1/hmf_q;
     hmf_a1_svf = 1 / (1 + hmf_g_coeff * (hmf_g_coeff + hmf_k_coeff)); hmf_a2_svf = hmf_g_coeff * hmf_a1_svf;
     hmf_gain_mod = (10 ^ (hmf_gain / 20)) - 1;
@@ -272,36 +288,39 @@ use_lpf ? (
     tmp_R=spl1-lp_b_a1*lp_b_x1_R-lp_b_a2*lp_b_x2_R + denorm; spl1=lp_b_b0*tmp_R+lp_b_b1*lp_b_x1_R+lp_b_b2*lp_b_x2_R; lp_b_x2_R=lp_b_x1_R; lp_b_x1_R=tmp_R; 
 );
 
-// 2. PARALLEL SUMMING JUNCTION (ZDF SVF)
-inL = spl0; inR = spl1;
+// 2. SERIAL PROCESSING (CONVERTED FROM PARALLEL)
+// Treating the output of one as input to the next.
 
 // LF SVF
+inL = spl0; inR = spl1;
 v3L = inL - lf_s2_L; v1L = (lf_s1_L + lf_g_coeff*v3L) * lf_a1_svf; v2L = lf_g_coeff*v1L + lf_s2_L; lf_s1_L = 2*v1L - lf_s1_L + denorm; lf_s2_L = 2*v2L - lf_s2_L + denorm;
 v3R = inR - lf_s2_R; v1R = (lf_s1_R + lf_g_coeff*v3R) * lf_a1_svf; v2R = lf_g_coeff*v1R + lf_s2_R; lf_s1_R = 2*v1R - lf_s1_R + denorm; lf_s2_R = 2*v2R - lf_s2_R + denorm;
-delta_LF_L = (slider12 ? v1L * lf_k_coeff : v2L) * lf_gain_mod;
-delta_LF_R = (slider12 ? v1R * lf_k_coeff : v2R) * lf_gain_mod;
+spl0 = inL + ((slider12 ? v1L * lf_k_coeff : v2L) * lf_gain_mod);
+spl1 = inR + ((slider12 ? v1R * lf_k_coeff : v2R) * lf_gain_mod);
 
-// LMF SVF (Always Bell)
+// LMF SVF (Always Bell) - Input is previous spl0/spl1
+inL = spl0; inR = spl1;
 v3L = inL - lmf_s2_L; v1L = (lmf_s1_L + lmf_g_coeff*v3L) * lmf_a1_svf; v2L = lmf_g_coeff*v1L + lmf_s2_L; lmf_s1_L = 2*v1L - lmf_s1_L + denorm; lmf_s2_L = 2*v2L - lmf_s2_L + denorm;
 v3R = inR - lmf_s2_R; v1R = (lmf_s1_R + lmf_g_coeff*v3R) * lmf_a1_svf; v2R = lmf_g_coeff*v1R + lmf_s2_R; lmf_s1_R = 2*v1R - lmf_s1_R + denorm; lmf_s2_R = 2*v2R - lmf_s2_R + denorm;
-delta_LMF_L = v1L * lmf_k_coeff * lmf_gain_mod;
-delta_LMF_R = v1R * lmf_k_coeff * lmf_gain_mod;
+spl0 = inL + (v1L * lmf_k_coeff * lmf_gain_mod);
+spl1 = inR + (v1R * lmf_k_coeff * lmf_gain_mod);
 
 // HMF SVF (Always Bell)
+inL = spl0; inR = spl1;
 v3L = inL - hmf_s2_L; v1L = (hmf_s1_L + hmf_g_coeff*v3L) * hmf_a1_svf; v2L = hmf_g_coeff*v1L + hmf_s2_L; hmf_s1_L = 2*v1L - hmf_s1_L + denorm; hmf_s2_L = 2*v2L - hmf_s2_L + denorm;
 v3R = inR - hmf_s2_R; v1R = (hmf_s1_R + hmf_g_coeff*v3R) * hmf_a1_svf; v2R = hmf_g_coeff*v1R + hmf_s2_R; hmf_s1_R = 2*v1R - hmf_s1_R + denorm; hmf_s2_R = 2*v2R - hmf_s2_R + denorm;
-delta_HMF_L = v1L * hmf_k_coeff * hmf_gain_mod;
-delta_HMF_R = v1R * hmf_k_coeff * hmf_gain_mod;
+spl0 = inL + (v1L * hmf_k_coeff * hmf_gain_mod);
+spl1 = inR + (v1R * hmf_k_coeff * hmf_gain_mod);
 
 // HF SVF
+inL = spl0; inR = spl1;
 v3L = inL - hf_s2_L; v1L = (hf_s1_L + hf_g_coeff*v3L) * hf_a1_svf; v2L = hf_g_coeff*v1L + hf_s2_L; hf_s1_L = 2*v1L - hf_s1_L + denorm; hf_s2_L = 2*v2L - hf_s2_L + denorm;
 v3R = inR - hf_s2_R; v1R = (hf_s1_R + hf_g_coeff*v3R) * hf_a1_svf; v2R = hf_g_coeff*v1R + hf_s2_R; hf_s1_R = 2*v1R - hf_s1_R + denorm; hf_s2_R = 2*v2R - hf_s2_R + denorm;
-delta_HF_L = (slider42 ? v1L * hf_k_coeff : (inL - v2L - v1L*hf_k_coeff)) * hf_gain_mod;
-delta_HF_R = (slider42 ? v1R * hf_k_coeff : (inR - v2R - v1R*hf_k_coeff)) * hf_gain_mod;
+spl0 = inL + ((slider42 ? v1L * hf_k_coeff : (inL - v2L - v1L*hf_k_coeff)) * hf_gain_mod);
+spl1 = inR + ((slider42 ? v1R * hf_k_coeff : (inR - v2R - v1R*hf_k_coeff)) * hf_gain_mod);
 
-// Summing Junction
-spl0 = inL + delta_LF_L + delta_LMF_L + delta_HMF_L + delta_HF_L;
-spl1 = inR + delta_LF_R + delta_LMF_R + delta_HMF_R + delta_HF_R;
+// End of Series processing. 
+// No final sum needed because spl0/spl1 were updated at each step.
 
 spl0 *= out_gain; spl1 *= out_gain;
 // Added Denorm to Output DC Blocker
