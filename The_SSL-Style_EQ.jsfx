@@ -1,18 +1,17 @@
 desc: The SSL-Style EQ (DocShadrach)
 // author: Doc Shadrach
-// version: 1.1
+// version: 1.2
 // about: Equalizer based on the curves and behavior of the SSL 4000 E/G Series.
 // 
 // This plugin uses some DSP algorithms by Chris Johnson (Airwindows).
 // Copyright (c) 2018 Chris Johnson
+// RBJ Audio EQ Cookbook formulas used for Resonant Shelves.
 //
 // Copyright (c) 2026 DocShadrach
 // All rights reserved.
 // Licensed for use inside REAPER for personal or professional projects only.
 // Modification, copying, redistribution, or creating derivative works is prohibited.
 // See LICENSE file in the repository for full terms.
-
-
 
 // ----------------------------------------------------------------------
 // 1. HEADER & CONTROLS
@@ -55,7 +54,7 @@ out_pin:right output
 // ----------------------------------------------------------------------
 @init
 
-gfx_ext_retina = 1; // Support for high-DPI and embedding scaling
+gfx_ext_retina = 1; 
 
 MEM_C  = 10000; MEM_S  = 20000; 
 MEM_C2 = 30000; MEM_S2 = 40000; 
@@ -65,79 +64,70 @@ max_graph_f = 24000;
 log_graph_range = log(max_graph_f / min_graph_f);
 last_gfx_w = 0; 
 
-// --- DC BLOCK VARIABLES ---
-dc_l_pre = 0; dc_r_pre = 0; // After saturation
-dc_l_out = 0; dc_r_out = 0; // Final safety
+// --- DC BLOCK VARIABLES (Unified Standard Implementation) ---
+// Input Stage
+dcb_x1_L = 0; dcb_y1_L = 0;
+dcb_x1_R = 0; dcb_y1_R = 0;
+// Output Stage
+out_dcb_x1_L = 0; out_dcb_y1_L = 0;
+out_dcb_x1_R = 0; out_dcb_y1_R = 0;
+
+dcb_R = 0.999; // Shared Feedback coefficient
 
 // --- LINK STATE VARS ---
 last_slider3 = slider3;
 last_slider50 = slider50;
 
-// --- SVF STATE VARIABLES (ZDF) ---
+// --- SVF STATE VARIABLES ---
 lf_s1_L = 0; lf_s2_L = 0; lf_s1_R = 0; lf_s2_R = 0;
 lmf_s1_L = 0; lmf_s2_L = 0; lmf_s1_R = 0; lmf_s2_R = 0;
 hmf_s1_L = 0; hmf_s2_L = 0; hmf_s1_R = 0; hmf_s2_R = 0;
 hf_s1_L = 0; hf_s2_L = 0; hf_s1_R = 0; hf_s2_R = 0;
 
-// Anti-denormal constant (Standardized 10^-30)
-denorm = 10 ^ -30; 
+denorm = pow(10, -30); 
 
-// --- DSP Functions ---
+// ----------------------------------------------------------------------
+// 3. DSP FUNCTIONS
+// ----------------------------------------------------------------------
 
 function calc_filter(type, freq, Q, db_gain) 
-  local(G, w0, Omega, Omega2, sqrt2G, sqrt2, dw, beta, t_a0, t_a1, t_a2, t_b0, t_b1, t_b2, alpha)
+  local(G, A, w0, sn, cs, alpha, beta, t_a0, t_a1, t_a2, t_b0, t_b1, t_b2)
 (
-    G = 10 ^ (db_gain / 20);
     w0 = 2 * $pi * freq / srate;
-    Omega = tan(w0 / 2);
-    Omega2 = Omega * Omega;
-    sqrt2 = 1.41421356237;
-
-    // --- SOPHOCLES ORFANIDIS MAGNITUDE-MATCHED DESIGN ---
+    sn = sin(w0);
+    cs = cos(w0);
+    alpha = sn / (2 * Q);
     
-    // Type 0: Bell / Peaking
     type == 0 ? (
-        dw = w0 / Q;
-        beta = (db_gain >= 0) ? tan(dw / 2) / sqrt(G) : tan(dw / 2) * sqrt(G);
-        t_b0 = 1 + G * beta;
-        t_b1 = -2 * cos(w0);
-        t_b2 = 1 - G * beta;
-        t_a0 = 1 + beta;
-        t_a1 = -2 * cos(w0);
-        t_a2 = 1 - beta;
+        A = 10 ^ (db_gain / 40);
+        t_b0 = 1 + alpha * A; t_b1 = -2 * cs; t_b2 = 1 - alpha * A;
+        t_a0 = 1 + alpha / A; t_a1 = -2 * cs; t_a2 = 1 - alpha / A;
     );
-
-    // Type 1: Low Shelf (Matches G at DC, 1 at Nyquist)
     type == 1 ? (
-        sqrt2G = sqrt(2 * G);
-        t_b0 = 1 + sqrt2G * Omega + G * Omega2;
-        t_b1 = 2 * (G * Omega2 - 1);
-        t_b2 = 1 - sqrt2G * Omega + G * Omega2;
-        t_a0 = 1 + sqrt2 * Omega + Omega2;
-        t_a1 = 2 * (Omega2 - 1);
-        t_a2 = 1 - sqrt2 * Omega + Omega2;
+        A = 10 ^ (db_gain / 40);
+        t_b0 = A * ((A + 1) - (A - 1) * cs + 2 * sqrt(A) * alpha);
+        t_b1 = 2 * A * ((A - 1) - (A + 1) * cs);
+        t_b2 = A * ((A + 1) - (A - 1) * cs - 2 * sqrt(A) * alpha);
+        t_a0 = (A + 1) + (A - 1) * cs + 2 * sqrt(A) * alpha;
+        t_a1 = -2 * ((A - 1) + (A + 1) * cs);
+        t_a2 = (A + 1) + (A - 1) * cs - 2 * sqrt(A) * alpha;
     );
-
-    // Type 2: High Shelf (Matches 1 at DC, G at Nyquist)
     type == 2 ? (
-        sqrt2G = sqrt(2 * G);
-        t_b0 = G + sqrt2G * Omega + Omega2;
-        t_b1 = 2 * (Omega2 - G);
-        t_b2 = G - sqrt2G * Omega + Omega2;
-        t_a0 = 1 + sqrt2 * Omega + Omega2;
-        t_a1 = 2 * (Omega2 - 1);
-        t_a2 = 1 - sqrt2 * Omega + Omega2;
+        A = 10 ^ (db_gain / 40);
+        t_b0 = A * ((A + 1) + (A - 1) * cs + 2 * sqrt(A) * alpha);
+        t_b1 = -2 * A * ((A - 1) + (A + 1) * cs);
+        t_b2 = A * ((A + 1) + (A - 1) * cs - 2 * sqrt(A) * alpha);
+        t_a0 = (A + 1) - (A - 1) * cs + 2 * sqrt(A) * alpha;
+        t_a1 = 2 * ((A - 1) - (A + 1) * cs);
+        t_a2 = (A + 1) - (A - 1) * cs - 2 * sqrt(A) * alpha;
     );
-
-    // Type 3 & 4: HPF / LPF (Standard RBJ)
-    (type == 3 || type == 4) ? (
-        alpha = sin(w0) / (2 * Q);
-        type == 3 ? (
-            t_b0 = (1 + cos(w0)) / 2; t_b1 = -(1 + cos(w0)); t_b2 = (1 + cos(w0)) / 2;
-        ) : (
-            t_b0 = (1 - cos(w0)) / 2; t_b1 = 1 - cos(w0); t_b2 = (1 - cos(w0)) / 2;
-        );
-        t_a0 = 1 + alpha; t_a1 = -2 * cos(w0); t_a2 = 1 - alpha;
+    type == 3 ? (
+        t_b0 = (1 + cs) / 2; t_b1 = -(1 + cs); t_b2 = (1 + cs) / 2;
+        t_a0 = 1 + alpha; t_a1 = -2 * cs; t_a2 = 1 - alpha;
+    );
+    type == 4 ? (
+        t_b0 = (1 - cs) / 2; t_b1 = 1 - cs; t_b2 = (1 - cs) / 2;
+        t_a0 = 1 + alpha; t_a1 = -2 * cs; t_a2 = 1 - alpha;
     );
 
     t_a0 = 1 / t_a0;
@@ -152,13 +142,7 @@ function sat_console_ssl(x, drive)
 (
     x *= drive;
     asym = x + 0.15 * x * x; 
-    asym > 1.0 ? (
-        asym = 0.95 + (asym - 1.0) * 0.1; 
-    ) : asym < -1.0 ? (
-        asym = -0.95 + (asym + 1.0) * 0.1;
-    ) : (
-        asym = asym - 0.15 * asym * asym * asym;
-    );
+    asym > 1.0 ? ( asym = 0.95 + (asym - 1.0) * 0.1; ) : asym < -1.0 ? ( asym = -0.95 + (asym + 1.0) * 0.1; ) : ( asym = asym - 0.15 * asym * asym * asym; );
     max(-1.5, min(1.5, asym));
 );
 
@@ -179,57 +163,39 @@ function update_filters()
     use_hpf ? ( calc_filter(3, hpf_freq, 1.0, 0); hp_b_a1=a1; hp_b_a2=a2; hp_b_b0=b0; hp_b_b1=b1; hp_b_b2=b2; calc_one_pole_hp(hpf_freq); hp_p_a1=a1; hp_p_b0=b0; hp_p_b1=b1; );
     use_lpf ? ( calc_filter(4, lpf_freq, 0.7071, 0); lp_b_a1=a1; lp_b_a2=a2; lp_b_b0=b0; lp_b_b1=b1; lp_b_b2=b2; );
 
-    // SVF Coefficient Calculation (Parallel bands)
+    // LF
     lf_freq=slider10; lf_gain=slider11; lf_bell=slider12; 
-    lf_q=0.71; (!lf_bell && model_g) ? lf_q = 1.3; 
+    lf_bell ? ( lf_q = 0.71; ) : ( model_g ? ( lf_q = 1.0; ) : ( lf_q = 1.45; ); );
     lf_g_coeff = tan($pi * lf_freq / srate); lf_k_coeff = 1/lf_q;
     lf_a1_svf = 1 / (1 + lf_g_coeff * (lf_g_coeff + lf_k_coeff)); lf_a2_svf = lf_g_coeff * lf_a1_svf;
     lf_gain_mod = (10 ^ (lf_gain / 20)) - 1;
-    // Biquad for GUI only
     calc_filter(lf_bell ? 0 : 1, lf_freq, lf_q, lf_gain); lf_a1=a1; lf_a2=a2; lf_b0=b0; lf_b1=b1; lf_b2=b2;
 
-    // --- LMF CALCULATION (Modified for E-Series Behavior) ---
-    lmf_freq=slider20; lmf_gain=slider21; lmf_q_base=slider22; lmf_q = lmf_q_base;
-    model_g ? ( 
-        // G-Series: Proportional Q (Strong)
-        lmf_q = lmf_q_base * (1 + abs(lmf_gain) * 0.2); 
-    ) : (
-        // E-Series: Analog Proportional Q
-        lmf_q = lmf_q_base * (0.5 + abs(lmf_gain) * 0.05);
-    );
-
-    lmf_g_coeff = tan($pi * lmf_freq / srate); lmf_k_coeff = 1/lmf_q;
+    // LMF (Non-Linear Q)
+    lmf_freq=slider20; lmf_gain=slider21; lmf_q_base=slider22; lmf_norm = abs(lmf_gain) / 15.0; 
+    model_g ? ( lmf_q = lmf_q_base * (1.2 + (lmf_norm * lmf_norm) * 2.8); ) : ( lmf_q = lmf_q_base * (0.5 + (lmf_norm * lmf_norm) * 1.5); );
+    lmf_g_coeff = tan($pi * lmf_freq / srate); lmf_k_coeff = 1 / lmf_q;
     lmf_a1_svf = 1 / (1 + lmf_g_coeff * (lmf_g_coeff + lmf_k_coeff)); lmf_a2_svf = lmf_g_coeff * lmf_a1_svf;
     lmf_gain_mod = (10 ^ (lmf_gain / 20)) - 1;
-    // Biquad for GUI only
     calc_filter(0, lmf_freq, lmf_q, lmf_gain); lmf_a1=a1; lmf_a2=a2; lmf_b0=b0; lmf_b1=b1; lmf_b2=b2;
 
-    // --- HMF CALCULATION (Modified for E-Series Behavior) ---
-    hmf_freq=slider30; hmf_gain=slider31; hmf_q_base=slider32; hmf_q = hmf_q_base;
-    model_g ? ( 
-        // G-Series: Proportional Q (Strong)
-        hmf_q = hmf_q_base * (1 + abs(hmf_gain) * 0.2); 
-    ) : (
-        // E-Series: Analog Proportional Q
-        hmf_q = hmf_q_base * (0.5 + abs(hmf_gain) * 0.05);
-    );
-
-    hmf_g_coeff = tan($pi * hmf_freq / srate); hmf_k_coeff = 1/hmf_q;
+    // HMF (Non-Linear Q)
+    hmf_freq=slider30; hmf_gain=slider31; hmf_q_base=slider32; hmf_norm = abs(hmf_gain) / 15.0;
+    model_g ? ( hmf_q = hmf_q_base * (1.2 + (hmf_norm * hmf_norm) * 2.8); ) : ( hmf_q = hmf_q_base * (0.5 + (hmf_norm * hmf_norm) * 1.5); );
+    hmf_g_coeff = tan($pi * hmf_freq / srate); hmf_k_coeff = 1 / hmf_q;
     hmf_a1_svf = 1 / (1 + hmf_g_coeff * (hmf_g_coeff + hmf_k_coeff)); hmf_a2_svf = hmf_g_coeff * hmf_a1_svf;
     hmf_gain_mod = (10 ^ (hmf_gain / 20)) - 1;
-    // Biquad for GUI only
     calc_filter(0, hmf_freq, hmf_q, hmf_gain); hmf_a1=a1; hmf_a2=a2; hmf_b0=b0; hmf_b1=b1; hmf_b2=b2;
 
+    // HF
     hf_freq=slider40; hf_gain=slider41; hf_bell=slider42; 
-    hf_q=0.71; (!hf_bell && model_g) ? hf_q = 1.3; 
+    hf_bell ? ( hf_q = 0.71; ) : ( model_g ? ( hf_q = 1.0; ) : ( hf_q = 1.45; ); );
     hf_g_coeff = tan($pi * hf_freq / srate); hf_k_coeff = 1/hf_q;
     hf_a1_svf = 1 / (1 + hf_g_coeff * (hf_g_coeff + hf_k_coeff)); hf_a2_svf = hf_g_coeff * hf_a1_svf;
     hf_gain_mod = (10 ^ (hf_gain / 20)) - 1;
-    // Biquad for GUI only
     calc_filter(hf_bell ? 0 : 2, hf_freq, hf_q, hf_gain); hf_a1=a1; hf_a2=a2; hf_b0=b0; hf_b1=b1; hf_b2=b2;
 
     out_trim_db = slider50; bypass_on = slider51; 
-    // Auto-gain logic removed.
     out_gain = (10 ^ (out_trim_db / 20));
 );
 
@@ -242,12 +208,16 @@ function y_to_gain(y) ( ((h_graph)/2 - y) / ((h_graph)/36); );
 gfx_ext_retina = 1;
 MEM_C = 10000; MEM_S = 20000; MEM_C2 = 30000; MEM_S2 = 40000;
 min_graph_f = 10; max_graph_f = 24000; log_graph_range = log(max_graph_f / min_graph_f);
-dc_l_pre = 0; dc_r_pre = 0; dc_l_out = 0; dc_r_out = 0;
 last_slider3 = slider3; last_slider50 = slider50;
 hp_b_x1_L=0; hp_b_x2_L=0; hp_p_s1_L=0; lp_b_x1_L=0; lp_b_x2_L=0;
 hp_b_x1_R=0; hp_b_x2_R=0; hp_p_s1_R=0; lp_b_x1_R=0; lp_b_x2_R=0;
-// Standardized denorm constant
-denorm = 10 ^ -30;
+
+denorm = pow(10, -30);
+
+// Initialize DC Blocker states (Unified)
+dcb_x1_L = 0; dcb_y1_L = 0; dcb_x1_R = 0; dcb_y1_R = 0; 
+out_dcb_x1_L = 0; out_dcb_y1_L = 0; out_dcb_x1_R = 0; out_dcb_y1_R = 0;
+dcb_R = 0.999; 
 
 @slider
 diff_in = slider3 - last_slider3;
@@ -260,74 +230,70 @@ last_slider3 = slider3; last_slider50 = slider50;
 update_filters();
 
 @sample
-// Capture clean input for bypass
 raw0 = spl0; raw1 = spl1;
-
 spl0 *= in_gain; spl1 *= in_gain;
-slew_threshold=0.8*(192000/srate); 
+
+// 1. INPUT STAGE: Saturation + DC Block
+slew_threshold = 0.8 * (192000 / srate); 
 sat_on ? (
   diff_L = spl0 - last_sample_L; diff_L = max(-slew_threshold, min(slew_threshold, diff_L)); spl0 = last_sample_L + diff_L; last_sample_L = spl0;
   diff_R = spl1 - last_sample_R; diff_R = max(-slew_threshold, min(slew_threshold, diff_R)); spl1 = last_sample_R + diff_R; last_sample_R = spl1;
+  
   spl0 = sat_console_ssl(spl0, 1.0); spl1 = sat_console_ssl(spl1, 1.0);
-  // Added Denorm to DC Blocker
-  spl0 = spl0 - dc_l_pre + 0.999 * dc_l_pre; dc_l_pre = spl0 + denorm;
-  spl1 = spl1 - dc_r_pre + 0.999 * dc_r_pre; dc_r_pre = spl1 + denorm;
+  
+  // Unified Input DC Blocker
+  outL = spl0 - dcb_x1_L + dcb_R * dcb_y1_L; dcb_x1_L = spl0; dcb_y1_L = outL + denorm; spl0 = outL;
+  outR = spl1 - dcb_x1_R + dcb_R * dcb_y1_R; dcb_x1_R = spl1; dcb_y1_R = outR + denorm; spl1 = outR;
+) : (
+  // State Tracking to prevent pops when engaging saturation
+  last_sample_L = spl0;
+  last_sample_R = spl1;
 );
 
-// 1. SERIAL HPF/LPF
+// 2. FILTERS: HPF/LPF
 use_hpf ? ( 
-    // Added Denorm to Serial Biquad State
-    tmp_L=spl0-hp_b_a1*hp_b_x1_L-hp_b_a2*hp_b_x2_L + denorm; spl0=hp_b_b0*tmp_L+hp_b_b1*hp_b_x1_L+hp_b_b2*hp_b_x2_L; hp_b_x2_L=hp_b_x1_L; hp_b_x1_L=tmp_L; 
-    tmp_R=spl1-hp_b_a1*hp_b_x1_R-hp_b_a2*hp_b_x2_R + denorm; spl1=hp_b_b0*tmp_R+hp_b_b1*hp_b_x1_R+hp_b_b2*hp_b_x2_R; hp_b_x2_R=hp_b_x1_R; hp_b_x1_R=tmp_R; 
-    out_1p_L=hp_p_b0*spl0+hp_p_s1_L; hp_p_s1_L=hp_p_b1*spl0-hp_p_a1*out_1p_L + denorm; spl0=out_1p_L; 
-    out_1p_R=hp_p_b0*spl1+hp_p_s1_R; hp_p_s1_R=hp_p_b1*spl1-hp_p_a1*out_1p_R + denorm; spl1=out_1p_R; 
+    tmp_L = spl0 - hp_b_a1*hp_b_x1_L - hp_b_a2*hp_b_x2_L + denorm; spl0 = hp_b_b0*tmp_L + hp_b_b1*hp_b_x1_L + hp_b_b2*hp_b_x2_L; hp_b_x2_L = hp_b_x1_L; hp_b_x1_L = tmp_L; 
+    tmp_R = spl1 - hp_b_a1*hp_b_x1_R - hp_b_a2*hp_b_x2_R + denorm; spl1 = hp_b_b0*tmp_R + hp_b_b1*hp_b_x1_R + hp_b_b2*hp_b_x2_R; hp_b_x2_R = hp_b_x1_R; hp_b_x1_R = tmp_R; 
+    out_1p_L = hp_p_b0*spl0 + hp_p_s1_L; hp_p_s1_L = hp_p_b1*spl0 - hp_p_a1*out_1p_L + denorm; spl0 = out_1p_L; 
+    out_1p_R = hp_p_b0*spl1 + hp_p_s1_R; hp_p_s1_R = hp_p_b1*spl1 - hp_p_a1*out_1p_R + denorm; spl1 = out_1p_R; 
 );
 use_lpf ? ( 
-    // Added Denorm to Serial Biquad State
-    tmp_L=spl0-lp_b_a1*lp_b_x1_L-lp_b_a2*lp_b_x2_L + denorm; spl0=lp_b_b0*tmp_L+lp_b_b1*lp_b_x1_L+lp_b_b2*lp_b_x2_L; lp_b_x2_L=lp_b_x1_L; lp_b_x1_L=tmp_L; 
-    tmp_R=spl1-lp_b_a1*lp_b_x1_R-lp_b_a2*lp_b_x2_R + denorm; spl1=lp_b_b0*tmp_R+lp_b_b1*lp_b_x1_R+lp_b_b2*lp_b_x2_R; lp_b_x2_R=lp_b_x1_R; lp_b_x1_R=tmp_R; 
+    tmp_L = spl0 - lp_b_a1*lp_b_x1_L - lp_b_a2*lp_b_x2_L + denorm; spl0 = lp_b_b0*tmp_L + lp_b_b1*lp_b_x1_L + lp_b_b2*lp_b_x2_L; lp_b_x2_L = lp_b_x1_L; lp_b_x1_L = tmp_L; 
+    tmp_R = spl1 - lp_b_a1*lp_b_x1_R - lp_b_a2*lp_b_x2_R + denorm; spl1 = lp_b_b0*tmp_R + lp_b_b1*lp_b_x1_R + lp_b_b2*lp_b_x2_R; lp_b_x2_R = lp_b_x1_R; lp_b_x1_R = tmp_R; 
 );
 
-// 2. SERIAL PROCESSING (CONVERTED FROM PARALLEL)
-// Treating the output of one as input to the next.
-
-// LF SVF
+// 3. EQ BANDS: Serial SVF
 inL = spl0; inR = spl1;
 v3L = inL - lf_s2_L; v1L = (lf_s1_L + lf_g_coeff*v3L) * lf_a1_svf; v2L = lf_g_coeff*v1L + lf_s2_L; lf_s1_L = 2*v1L - lf_s1_L + denorm; lf_s2_L = 2*v2L - lf_s2_L + denorm;
 v3R = inR - lf_s2_R; v1R = (lf_s1_R + lf_g_coeff*v3R) * lf_a1_svf; v2R = lf_g_coeff*v1R + lf_s2_R; lf_s1_R = 2*v1R - lf_s1_R + denorm; lf_s2_R = 2*v2R - lf_s2_R + denorm;
 spl0 = inL + ((slider12 ? v1L * lf_k_coeff : v2L) * lf_gain_mod);
 spl1 = inR + ((slider12 ? v1R * lf_k_coeff : v2R) * lf_gain_mod);
 
-// LMF SVF (Always Bell) - Input is previous spl0/spl1
 inL = spl0; inR = spl1;
 v3L = inL - lmf_s2_L; v1L = (lmf_s1_L + lmf_g_coeff*v3L) * lmf_a1_svf; v2L = lmf_g_coeff*v1L + lmf_s2_L; lmf_s1_L = 2*v1L - lmf_s1_L + denorm; lmf_s2_L = 2*v2L - lmf_s2_L + denorm;
 v3R = inR - lmf_s2_R; v1R = (lmf_s1_R + lmf_g_coeff*v3R) * lmf_a1_svf; v2R = lmf_g_coeff*v1R + lmf_s2_R; lmf_s1_R = 2*v1R - lmf_s1_R + denorm; lmf_s2_R = 2*v2R - lmf_s2_R + denorm;
 spl0 = inL + (v1L * lmf_k_coeff * lmf_gain_mod);
 spl1 = inR + (v1R * lmf_k_coeff * lmf_gain_mod);
 
-// HMF SVF (Always Bell)
 inL = spl0; inR = spl1;
 v3L = inL - hmf_s2_L; v1L = (hmf_s1_L + hmf_g_coeff*v3L) * hmf_a1_svf; v2L = hmf_g_coeff*v1L + hmf_s2_L; hmf_s1_L = 2*v1L - hmf_s1_L + denorm; hmf_s2_L = 2*v2L - hmf_s2_L + denorm;
 v3R = inR - hmf_s2_R; v1R = (hmf_s1_R + hmf_g_coeff*v3R) * hmf_a1_svf; v2R = hmf_g_coeff*v1R + hmf_s2_R; hmf_s1_R = 2*v1R - hmf_s1_R + denorm; hmf_s2_R = 2*v2R - hmf_s2_R + denorm;
 spl0 = inL + (v1L * hmf_k_coeff * hmf_gain_mod);
 spl1 = inR + (v1R * hmf_k_coeff * hmf_gain_mod);
 
-// HF SVF
 inL = spl0; inR = spl1;
 v3L = inL - hf_s2_L; v1L = (hf_s1_L + hf_g_coeff*v3L) * hf_a1_svf; v2L = hf_g_coeff*v1L + hf_s2_L; hf_s1_L = 2*v1L - hf_s1_L + denorm; hf_s2_L = 2*v2L - hf_s2_L + denorm;
 v3R = inR - hf_s2_R; v1R = (hf_s1_R + hf_g_coeff*v3R) * hf_a1_svf; v2R = hf_g_coeff*v1R + hf_s2_R; hf_s1_R = 2*v1R - hf_s1_R + denorm; hf_s2_R = 2*v2R - hf_s2_R + denorm;
 spl0 = inL + ((slider42 ? v1L * hf_k_coeff : (inL - v2L - v1L*hf_k_coeff)) * hf_gain_mod);
 spl1 = inR + ((slider42 ? v1R * hf_k_coeff : (inR - v2R - v1R*hf_k_coeff)) * hf_gain_mod);
 
-// End of Series processing. 
-// No final sum needed because spl0/spl1 were updated at each step.
-
+// 4. OUTPUT STAGE
 spl0 *= out_gain; spl1 *= out_gain;
-// Added Denorm to Output DC Blocker
-spl0 = spl0 - dc_l_out + 0.999 * dc_l_out; dc_l_out = spl0 + denorm;
-spl1 = spl1 - dc_r_out + 0.999 * dc_r_out; dc_r_out = spl1 + denorm;
 
-// Bypass Logic (Total Bypass)
+// Unified Output DC Blocker
+outL = spl0 - out_dcb_x1_L + dcb_R * out_dcb_y1_L; out_dcb_x1_L = spl0; out_dcb_y1_L = outL + denorm; spl0 = outL;
+outR = spl1 - out_dcb_x1_R + dcb_R * out_dcb_y1_R; out_dcb_x1_R = spl1; out_dcb_y1_R = outR + denorm; spl1 = outR;
+
 bypass_on ? ( spl0 = raw0; spl1 = raw1; );
 
 @gfx 400 230
@@ -356,7 +322,7 @@ drag_node == -1 ? ( (!hide_faders && mouse_y > h_graph) ? ( hit_in ? hit = 10; h
 (mouse_down && hit >= 0 && hit < 20 && !ignore_drag) ? drag_node = hit;
 (mouse_click) ? ( current_time = time_precise(); is_double = (current_time - last_click_time < 0.4); last_click_time = current_time; hit == 20 ? ( slider1 = !slider1; slider_automate(slider1); update_filters(); ); hit == 21 ? ( slider51 = !slider51; slider_automate(slider51); ); hit == 22 ? ( slider2 = !slider2; slider_automate(slider2); update_filters(); ); hit == 23 ? ( slider52 = !slider52; slider_automate(slider52); ); hit == 24 ? ( slider12 = !slider12; slider_automate(slider12); update_filters(); ); hit == 25 ? ( slider42 = !slider42; slider_automate(slider42); update_filters(); ); (is_double && hit >= 0 && hit <= 5) ? ( hit == 0 ? ( slider5 == 0 ? slider5 = 20 : slider5 = 0; ); hit == 1 ? ( slider12 = !slider12; ); hit == 2 ? ( slider21 = 0; ); hit == 3 ? ( slider31 = 0; ); hit == 4 ? ( slider42 = !slider42; ); hit == 5 ? ( slider6 >= 22000 ? slider6 = 20000 : slider6 = 22000; ); update_filters(); slider_automate(slider5); slider_automate(slider6); slider_automate(slider12); slider_automate(slider21); slider_automate(slider31); slider_automate(slider42); drag_node = -1; ignore_drag = 1; ); (is_double && hit == 10) ? ( old_val = slider3; slider3 = 0; slider_automate(slider3); slider52 ? ( diff = slider3 - old_val; slider50 = max(-12, min(12, slider50 - diff)); slider_automate(slider50); ); last_slider3 = slider3; last_slider50 = slider50; drag_node = -1; ignore_drag = 1; ); (is_double && hit == 11) ? ( old_val = slider50; slider50 = 0; slider_automate(slider50); slider52 ? ( diff = slider50 - old_val; slider3 = max(-12, min(12, slider3 - diff)); slider_automate(slider3); ); last_slider3 = slider3; last_slider50 = slider50; drag_node = -1; ignore_drag = 1; ); (!ignore_drag && hit == 10) ? ( drag_val_start = slider3; drag_mouse_start = mouse_x; ); (!ignore_drag && hit == 11) ? ( drag_val_start = slider50; drag_mouse_start = mouse_x; ); ); ) : hit = drag_node;
 (drag_node >= 0 && !ignore_drag) ? ( px_per_db = (sl_w - 20) / 24; drag_node == 10 ? ( db_change = (mouse_x - drag_mouse_start) / px_per_db; new_val = max(-12, min(12, drag_val_start + db_change)); new_val = floor(new_val * 100 + 0.5) / 100; diff = new_val - slider3; slider3 = new_val; slider_automate(slider3); slider52 ? ( slider50 = max(-12, min(12, slider50 - diff)); slider50 = floor(slider50 * 100 + 0.5) / 100; slider_automate(slider50); ); last_slider3 = slider3; last_slider50 = slider50; ); drag_node == 11 ? ( db_change = (mouse_x - drag_mouse_start) / px_per_db; new_val = max(-12, min(12, drag_val_start + db_change)); new_val = floor(new_val * 100 + 0.5) / 100; diff = new_val - slider50; slider50 = new_val; slider_automate(slider50); slider52 ? ( slider3 = max(-12, min(12, slider3 - diff)); slider3 = floor(slider3 * 100 + 0.5) / 100; slider_automate(slider3); ); last_slider3 = slider3; last_slider50 = slider50; ); drag_node < 10 ? ( target_f = x_to_freq(mouse_x); target_g = y_to_gain(mouse_y); target_g = max(-15, min(15, target_g)); drag_node == 0 ? ( val = floor(target_f + 0.5); val < 18 ? val = 20; mouse_x < 25 ? val = 0; slider5 = min(350, val); slider_automate(slider5); ); drag_node == 1 ? ( slider10 = floor(min(450, max(30, target_f)) + 0.5); slider11 = floor(target_g * 100 + 0.5) / 100; slider_automate(slider10); slider_automate(slider11); ); drag_node == 2 ? ( slider20 = floor(min(2500, max(200, target_f)) + 0.5); slider21 = floor(target_g * 100 + 0.5) / 100; slider_automate(slider20); slider_automate(slider21); ); drag_node == 3 ? ( slider30 = floor(min(7000, max(600, target_f)) + 0.5); slider31 = floor(target_g * 100 + 0.5) / 100; slider_automate(slider30); slider_automate(slider31); ); drag_node == 4 ? ( slider40 = floor(min(16000, max(1500, target_f)) + 0.5); slider41 = floor(target_g * 100 + 0.5) / 100; slider_automate(slider40); slider_automate(slider41); ); drag_node == 5 ? ( val = floor(target_f + 0.5); val > 21000 ? val = 20000; mouse_x > gfx_w - 25 ? val = 22000; slider6 = max(3000, val); slider_automate(slider6); ); ); update_filters(); );
-(hit >= 0 && mouse_wheel != 0) ? ( hit == 10 ? ( step = (mouse_wheel/120)*0.5; old_v = slider3; slider3 = max(-12, min(12, slider3 + step)); slider3 = floor(slider3 * 100 + 0.5) / 100; slider_automate(slider3); slider52 ? ( actual_diff = slider3 - old_v; slider50 = max(-12, min(12, slider50 - actual_diff)); slider50 = floor(slider50 * 100 + 0.5) / 100; slider_automate(slider50); ); last_slider3 = slider3; last_slider50 = slider50; ); hit == 11 ? ( step = (mouse_wheel/120)*0.5; old_v = slider50; slider50 = max(-12, min(12, slider50 + step)); slider50 = floor(slider50 * 100 + 0.5) / 100; slider_automate(slider50); slider52 ? ( actual_diff = slider50 - old_v; slider3 = max(-12, min(12, slider3 - actual_diff)); slider3 = floor(slider3 * 100 + 0.5) / 100; slider_automate(slider50); ); last_slider3 = slider3; last_slider50 = slider50; ); hit == 0 ? ( step=(mouse_wheel/120)*5; val=slider5+step; slider5==0&&step>0?val=20; val<15?val=0; slider5=floor(min(350,max(0,val)) + 0.5); slider_automate(slider5); ); hit == 5 ? ( step=(mouse_wheel/120)*500; val=slider6+step; slider6>=22000&&step<0?val=20000; val>21500?val=22000; slider6=floor(min(22000,max(3000,val)) + 0.5); slider_automate(slider6); ); hit == 2 ? ( diff=(mouse_wheel/120)*0.1; slider22=max(0.5,min(3.0,slider22+diff)); slider_automate(slider22); ); hit == 3 ? ( diff=(mouse_wheel/120)*0.1; slider32=max(0.5,min(3.0,slider32+diff)); slider_automate(slider32); ); mouse_wheel = 0; update_filters(); );
+(hit >= 0 && mouse_wheel != 0) ? ( hit == 10 ? ( step = (mouse_wheel/120)*0.5; old_v = slider3; slider3 = max(-12, min(12, slider3 + step)); slider3 = floor(slider3 * 100 + 0.5) / 100; slider_automate(slider3); slider52 ? ( actual_diff = slider3 - old_v; slider50 = max(-12, min(12, slider50 - actual_diff)); slider50 = floor(slider50 * 100 + 0.5) / 100; slider_automate(slider50); ); last_slider3 = slider3; last_slider50 = slider50; ); hit == 11 ? ( step = (mouse_wheel/120)*0.5; old_v = slider50; slider50 = max(-12, min(12, slider50 + step)); slider50 = floor(slider50 * 100 + 0.5) / 100; slider_automate(slider50); slider52 ? ( actual_diff = slider50 - old_v; slider3 = max(-12, min(12, slider3 - actual_diff)); slider3 = floor(slider3 * 100 + 0.5) / 100; slider_automate(slider3); ); last_slider3 = slider3; last_slider50 = slider50; ); hit == 0 ? ( step=(mouse_wheel/120)*5; val=slider5+step; slider5==0&&step>0?val=20; val<15?val=0; slider5=floor(min(350,max(0,val)) + 0.5); slider_automate(slider5); ); hit == 5 ? ( step=(mouse_wheel/120)*500; val=slider6+step; slider6>=22000&&step<0?val=20000; val>21500?val=22000; slider6=floor(min(22000,max(3000,val)) + 0.5); slider_automate(slider6); ); hit == 2 ? ( diff=(mouse_wheel/120)*0.1; slider22=max(0.5,min(3.0,slider22+diff)); slider_automate(slider22); ); hit == 3 ? ( diff=(mouse_wheel/120)*0.1; slider32=max(0.5,min(3.0,slider32+diff)); slider_automate(slider32); ); mouse_wheel = 0; update_filters(); );
 function draw_node(x, y, active, r, g, b) ( gfx_r=r; gfx_g=g; gfx_b=b; active?gfx_a=1:gfx_a=0.7; gfx_circle(x, y, 5, 1); active?gfx_circle(x,y,7,0); );
 gfx_a=0.5; gfx_r=0.5; gfx_g=0.5; gfx_b=0.5; gfx_x=nx_hpf; gfx_y=h_graph-20; slider5==0 ? ( gfx_a=0.3; gfx_line(nx_hpf,h_graph,nx_hpf,h_graph-30); gfx_drawstr("HP",1|4); ) : ( gfx_a=0.8; gfx_line(nx_hpf,h_graph,nx_hpf,h_graph/2+20); gfx_drawstr("HP",1|4); );
 gfx_x=nx_lpf; gfx_y=h_graph-20; slider6>=22000 ? ( gfx_a=0.3; gfx_line(nx_lpf,h_graph,nx_lpf,h_graph-30); gfx_drawstr("LP",1|4); ) : ( gfx_a=0.8; gfx_line(nx_lpf,h_graph,nx_lpf,h_graph/2+20); gfx_drawstr("LP",1|4); );
