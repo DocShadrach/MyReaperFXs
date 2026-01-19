@@ -23,7 +23,7 @@ slider6:0<-0.5,0.5,0.001>Tube Bias (Offset)
 slider7:0.0<0,1,0.01>Tape Drive
 slider8:0.5<0,1,0.01>Tape Head Bump (Low End)
 slider9:0<0,1,1{Tube to Tape,Tape to Tube}>Signal Flow
-slider10:0<-24,24,0.1>Output Level (dB)
+slider10:-3<-24,24,0.1>Output Level (dB)
 slider11:100<0,100,0.1>Dry/Wet Mix (%)
 slider12:0<0,1,1>-Bypass
 
@@ -146,7 +146,9 @@ coup_coeff = exp(-2.0 * pi * coup_freq / srate);
 coup_gain = 1.0 - coup_coeff;
 
 // Auto Gain Targets (For saturation drives)
-comp_tape = 1.0 / (0.7 + (slider7 * 1.8)); 
+// Base set to 1.0 to ensure Unity Gain at 0 Drive. 
+// Multiplier set to 1.5 to match max reduction of original curve (1/2.5).
+comp_tape = 1.0 / (1.0 + (slider7 * 1.5)); 
 comp_tube = 1.0 / (1.0 + (slider4 * 0.4)); 
 tgt_auto_comp_factor = comp_tape * comp_tube;
 
