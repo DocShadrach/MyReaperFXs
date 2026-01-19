@@ -1,0 +1,464 @@
+desc: Oxide Glass Saturator (DocShadrach)
+// author: Doc Shadrach
+// version: 1.0
+// about: A combination of tube and tape saturation.
+// 
+// This plugin uses some DSP algorithms by Chris Johnson (Airwindows).
+// Copyright (c) 2018 Chris Johnson
+//
+// Copyright (c) 2026 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
+
+
+// --- SLIDER SECTION ---
+slider1:0<-24,24,0.1>Input Trim (dB)
+slider2:20<20,1000,1>High Pass (Hz)
+slider3:20000<2000,20000,10>Low Pass (Hz)
+slider4:0.5<0,1,0.01>Tube Drive
+slider5:0.5<0,1,0.01>Tube Character (Triode Blend)
+slider6:0<-0.5,0.5,0.001>Tube Bias (Offset)
+slider7:0.0<0,1,0.01>Tape Drive
+slider8:0.5<0,1,0.01>Tape Head Bump (Low End)
+slider9:0<0,1,1{Tube to Tape,Tape to Tube}>Signal Flow
+slider10:0<-24,24,0.1>Output Level (dB)
+slider11:100<0,100,0.1>Dry/Wet Mix (%)
+slider12:0<0,1,1>-Bypass
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+// --- Constants ---
+pi = 3.14159265358979323846;
+denorm = pow(10, -30); // Strict math
+epsilon = 0.000000001;
+
+// --- Tube State ---
+slew_cap_L = 0.0; slew_cap_R = 0.0;
+dyn_bias_L = 0.0; dyn_bias_R = 0.0;
+
+// --- Tape State ---
+tape_hyst_L = 0.0; tape_hyst_R = 0.0;
+// Tape Slew State (Airwindows Style Compression)
+last_tape_L = 0.0; last_tape_R = 0.0;
+
+// Head Bump Biquad
+hb_x1_L = 0; hb_x2_L = 0; hb_y1_L = 0; hb_y2_L = 0;
+hb_x1_R = 0; hb_x2_R = 0; hb_y1_R = 0; hb_y2_R = 0;
+
+// --- Iron State ---
+iron_lp_L = 0.0; iron_lp_R = 0.0;
+
+// --- Filters ---
+hp1_L = 0.0; hp2_L = 0.0; hp1_R = 0.0; hp2_R = 0.0;
+lp1_L = 0.0; lp2_L = 0.0; lp1_R = 0.0; lp2_R = 0.0;
+coup_lp_L = 0.0; coup_lp_R = 0.0;
+
+// --- Output DC Block ---
+dc_last_in_L = 0.0; dc_last_out_L = 0.0;
+dc_last_in_R = 0.0; dc_last_out_R = 0.0;
+
+// Scope
+gfx_scope_len = 2048; gfx_idx = 0;
+
+// --- FUNCTIONS ---
+
+// Pade approx for Tanh
+function fast_tanh(x) (
+    x = max(-3.0, min(3.0, x));
+    x * (27.0 + x*x) / (27.0 + 9.0*x*x);
+);
+
+// RC Slew Limiter
+function rc_slew(in, last, coeff) (
+    last + (in - last) * coeff;
+);
+
+// Chebyshev Polynomial T2 (2x^2 - 1) for clean 2nd harmonic
+function chebyshev_t2(x) ( 2*x*x );
+
+@slider
+tgt_input_gain = pow(10, slider1 / 20);
+// Inverse compensation for Input Trim
+// If Input is boosted, this reduces output by same amount.
+tgt_in_comp = 1.0 / tgt_input_gain; 
+
+// Controls Global Output Gain
+tgt_out_gain = pow(10, slider10 / 20);
+
+// Use target variables for smoothing in @block/@sample
+tgt_mix_percent = slider11 / 100;
+bypass_state = slider12;
+
+// Filter coeffs targets
+freq_hp = max(20, min(slider2, srate * 0.49));
+tgt_hp_coeff = exp(-2.0 * pi * freq_hp / srate);
+
+freq_lp = max(20, min(slider3, srate * 0.49));
+tgt_lp_coeff = exp(-2.0 * pi * freq_lp / srate);
+// lp_correction calculated in @sample
+
+// Tape Head Bump
+bump_freq = 84.0;
+bump_bw = 1.5;
+w0 = 2 * pi * bump_freq / srate;
+sin_w0 = sin(w0);
+(abs(sin_w0) < epsilon) ? sin_w0 = epsilon;
+hb_arg = (0.34657359 * bump_bw * w0) / sin_w0;
+hb_sinh = (exp(hb_arg) - exp(-hb_arg)) * 0.5;
+alpha = sin_w0 * hb_sinh;
+
+A_bump = pow(10, (slider8 * 6.0) / 40); 
+b0_hb = 1 + alpha*A_bump; b1_hb = -2 * cos(w0); b2_hb = 1 - alpha*A_bump;
+a0_hb = 1 + alpha/A_bump; a1_hb = -2 * cos(w0); a2_hb = 1 - alpha/A_bump;
+
+inv_a0 = 1.0 / a0_hb;
+b0_hb *= inv_a0; b1_hb *= inv_a0; b2_hb *= inv_a0; 
+a1_hb *= inv_a0; a2_hb *= inv_a0;
+
+// Tube Params Targets
+tgt_tube_drive = slider4 * 2.0;
+// Slew calculation based on drive (Miller Effect)
+slew_base = 18000 + (2000 * (1.0-slider4)); 
+tgt_slew_coeff = 1.0 - exp(-2.0 * pi * slew_base / srate);
+tgt_bias_target = slider6;
+tgt_tube_char = slider5; 
+
+// Tape Params Targets
+tgt_tape_drive_amt = (slider7 * 2.5) + 1.0; 
+tgt_hyst_weight = 0.5 + (slider7 * 0.3);
+
+// Iron Params
+iron_freq = 120.0;
+iron_coeff = exp(-2.0 * pi * iron_freq / srate);
+iron_gain = 1.0 - iron_coeff;
+iron_amount = 0.45;
+core_saturation = 2.2;
+
+// Coupling Cap
+coup_freq = 10.0;
+coup_coeff = exp(-2.0 * pi * coup_freq / srate);
+coup_gain = 1.0 - coup_coeff;
+
+// Auto Gain Targets (For saturation drives)
+comp_tape = 1.0 / (0.7 + (slider7 * 1.8)); 
+comp_tube = 1.0 / (1.0 + (slider4 * 0.4)); 
+tgt_auto_comp_factor = comp_tape * comp_tube;
+
+// DC Block
+dc_block_freq = 5.0;
+dc_coeff = exp(-2.0 * pi * dc_block_freq / srate);
+
+routing_mode = slider9;
+
+@block
+d_in_gain = (tgt_input_gain - input_gain) / samplesblock;
+d_out_gain = (tgt_out_gain - out_gain) / samplesblock;
+d_in_comp = (tgt_in_comp - in_comp) / samplesblock;
+
+// Delta calculations for de-zippering
+d_hp_coeff = (tgt_hp_coeff - hp_coeff) / samplesblock;
+d_lp_coeff = (tgt_lp_coeff - lp_coeff) / samplesblock;
+d_tube_drive = (tgt_tube_drive - tube_drive) / samplesblock;
+d_slew_coeff = (tgt_slew_coeff - slew_coeff) / samplesblock;
+d_bias_target = (tgt_bias_target - bias_target) / samplesblock;
+d_tube_char = (tgt_tube_char - tube_char) / samplesblock;
+d_tape_drive_amt = (tgt_tape_drive_amt - tape_drive_amt) / samplesblock;
+d_hyst_weight = (tgt_hyst_weight - hyst_weight) / samplesblock;
+d_auto_comp_factor = (tgt_auto_comp_factor - auto_comp_factor) / samplesblock;
+d_mix_percent = (tgt_mix_percent - mix_percent) / samplesblock;
+
+@sample
+bypass_state ? (
+    input_gain = tgt_input_gain; 
+    out_gain = tgt_out_gain;
+    
+    // Snap smoothed vars to target when bypassed to avoid drift
+    in_comp = tgt_in_comp;
+    hp_coeff = tgt_hp_coeff; lp_coeff = tgt_lp_coeff;
+    tube_drive = tgt_tube_drive; slew_coeff = tgt_slew_coeff;
+    bias_target = tgt_bias_target; tube_char = tgt_tube_char;
+    tape_drive_amt = tgt_tape_drive_amt; hyst_weight = tgt_hyst_weight;
+    auto_comp_factor = tgt_auto_comp_factor; mix_percent = tgt_mix_percent;
+
+    spl0 = spl0; spl1 = spl1;
+    vis_in = (spl0 + spl1) * 0.5; vis_out = vis_in;
+) : (
+    // Parameter Smoothing (De-zippering)
+    input_gain += d_in_gain;
+    out_gain += d_out_gain;
+    in_comp += d_in_comp;
+    
+    hp_coeff += d_hp_coeff;
+    lp_coeff += d_lp_coeff;
+    tube_drive += d_tube_drive;
+    slew_coeff += d_slew_coeff;
+    bias_target += d_bias_target;
+    tube_char += d_tube_char;
+    tape_drive_amt += d_tape_drive_amt;
+    hyst_weight += d_hyst_weight;
+    auto_comp_factor += d_auto_comp_factor;
+    mix_percent += d_mix_percent;
+    
+    // Recalc dependent correction
+    lp_correction = 1.0 - lp_coeff;
+
+    // Input & Denorm
+    inL = spl0 * input_gain;
+    inR = spl1 * input_gain;
+    inL += denorm; inR += denorm;
+    
+    // Capture DRY signal (This is BOOSTED by Input Trim)
+    dryL = inL; dryR = inR;
+    vis_in = (inL + inR) * 0.5;
+    
+    // Reset crossover bypass accumulators
+    dry_bypass_L = 0; dry_bypass_R = 0;
+
+    // --- PRE FILTERS (CROSSOVER SPLIT) ---
+    // 1. High Pass Split
+    // hp1_L essentially tracks the Low Frequencies. I keep them in dry_bypass.
+    hp1_L = (hp1_L * hp_coeff) + (inL * (1.0 - hp_coeff)); 
+    dry_bypass_L += hp1_L; // Store Lows
+    inL = inL - hp1_L;     // inL is now High Passed
+    
+    hp1_R = (hp1_R * hp_coeff) + (inR * (1.0 - hp_coeff)); 
+    dry_bypass_R += hp1_R; // Store Lows
+    inR = inR - hp1_R;     // inR is now High Passed
+
+    // 2. Low Pass Split
+    // Save signal entering LPF to calculate rejection later
+    temp_lpf_in_L = inL; 
+    temp_lpf_in_R = inR;
+    
+    lp1_L = (lp1_L * lp_coeff) + (inL * lp_correction); inL = lp1_L; // inL is now Band Passed
+    lp1_R = (lp1_R * lp_coeff) + (inR * lp_correction); inR = lp1_R; // inR is now Band Passed
+    
+    // Calculate rejected Highs and add to bypass
+    dry_bypass_L += (temp_lpf_in_L - inL);
+    dry_bypass_R += (temp_lpf_in_R - inR);
+
+    // --- PROCESSING LOOP (Only Band Passed Signal) ---
+    stage = 0;
+    loop(2,
+        do_tube = 0; do_tape = 0;
+        (routing_mode == 0) ? ( (stage == 0) ? do_tube = 1 : do_tape = 1; ) 
+                       : ( (stage == 0) ? do_tape = 1 : do_tube = 1; );
+
+        // ================= TUBE STAGE =================
+        do_tube ? (
+            // 1. Dynamic Bias (Grid Sag)
+            dyn_bias_L = (dyn_bias_L * 0.999) + (abs(inL) * 0.001); 
+            dyn_bias_R = (dyn_bias_R * 0.999) + (abs(inR) * 0.001);
+            
+            t_in_L = inL * (1.0 + tube_drive) + bias_target - (dyn_bias_L * 0.2);
+            t_in_R = inR * (1.0 + tube_drive) + bias_target - (dyn_bias_R * 0.2);
+
+            // 2. RC Slew Limiting
+            slew_cap_L = rc_slew(t_in_L, slew_cap_L, slew_coeff);
+            slew_cap_R = rc_slew(t_in_R, slew_cap_R, slew_coeff);
+            
+            // Use slewed signal
+            sig_L = slew_cap_L; 
+            sig_R = slew_cap_R;
+
+            // 3. Chebyshev Harmonics (Cleaner than polynomial loop)
+            // First, soft clip to constrain range
+            sat_L = fast_tanh(sig_L);
+            sat_R = fast_tanh(sig_R);
+            
+            // Apply Chebyshev T2 for 2nd Harmonic (Octave)
+            even_L = chebyshev_t2(sat_L * 0.8) * 0.5;
+            even_R = chebyshev_t2(sat_R * 0.8) * 0.5;
+            
+            // Blend: Dry(Sat) + Wet(Harmonics)
+            inL = (sat_L * (1.0 - tube_char*0.5)) + (even_L * tube_char * 0.4);
+            inR = (sat_R * (1.0 - tube_char*0.5)) + (even_R * tube_char * 0.4);
+            
+            // Coupling Cap (Remove DC introduced by Bias/Chebyshev)
+            coup_lp_L = (coup_lp_L * coup_coeff) + (inL * coup_gain); inL = inL - coup_lp_L;
+            coup_lp_R = (coup_lp_R * coup_coeff) + (inR * coup_gain); inR = inR - coup_lp_R;
+        );
+
+        // ================= TAPE STAGE (HYBRID v2/v3 + AIRWINDOWS SLEW) =================
+        do_tape ? (
+            // 1. Head Bump
+            bump_L = (b0_hb * inL) + (b1_hb * hb_x1_L) + (b2_hb * hb_x2_L) - (a1_hb * hb_y1_L) - (a2_hb * hb_y2_L);
+            hb_x2_L = hb_x1_L; hb_x1_L = inL; hb_y2_L = hb_y1_L; hb_y1_L = bump_L;
+            inL = bump_L;
+
+            bump_R = (b0_hb * inR) + (b1_hb * hb_x1_R) + (b2_hb * hb_x2_R) - (a1_hb * hb_y1_R) - (a2_hb * hb_y2_R);
+            hb_x2_R = hb_x1_R; hb_x1_R = inR; hb_y2_R = hb_y1_R; hb_y1_R = bump_R;
+            inR = bump_R;
+
+            // 2. Drive
+            (tape_drive_amt > 1.0) ? ( inL *= tape_drive_amt; inR *= tape_drive_amt; );
+            
+            // 3. AIRWINDOWS STYLE SLEW LIMITER (Compression)
+            // Acts as dynamic compressor on transients. 
+            // The more drive, the tighter the slew limit (more compression).
+            slew_max = 1.0 / (tape_drive_amt + 0.1); 
+            
+            delta_L = inL - last_tape_L;
+            delta_L = max(-slew_max, min(slew_max, delta_L)); // Clamp change speed
+            inL = last_tape_L + delta_L;
+            last_tape_L = inL;
+
+            delta_R = inR - last_tape_R;
+            delta_R = max(-slew_max, min(slew_max, delta_R)); // Clamp change speed
+            inR = last_tape_R + delta_R;
+            last_tape_R = inR;
+
+            // 4. Hysteresis (Simplified v3 logic is stabler)
+            tape_hyst_L = fast_tanh(inL + (tape_hyst_L * hyst_weight));
+            tape_hyst_R = fast_tanh(inR + (tape_hyst_R * hyst_weight));
+            
+            inL = (inL * 0.5) + (tape_hyst_L * 0.5);
+            inR = (inR * 0.5) + (tape_hyst_R * 0.5);
+            
+            // Limit output
+            inL = fast_tanh(inL);
+            inR = fast_tanh(inR);
+        );
+
+        stage += 1;
+    );
+
+    // --- IRON (TRANSFORMER - SPLIT BAND SIGMOID) ---
+    // ---------------------------------------------------------
+    iron_lp_L = (iron_lp_L * iron_coeff) + (inL * iron_gain); 
+    sat_core_L = fast_tanh(iron_lp_L * core_saturation) / core_saturation;
+    inL = (inL - iron_lp_L) + sat_core_L + ((iron_lp_L - sat_core_L) * (1.0 - iron_amount));
+
+    iron_lp_R = (iron_lp_R * iron_coeff) + (inR * iron_gain); 
+    sat_core_R = fast_tanh(iron_lp_R * core_saturation) / core_saturation;
+    inR = (inR - iron_lp_R) + sat_core_R + ((iron_lp_R - sat_core_R) * (1.0 - iron_amount));
+    // ---------------------------------------------------------
+
+    // --- FINAL OUTPUT STAGE ---
+
+    // DC Blocker
+    dc_out_L = inL - dc_last_in_L + dc_coeff * dc_last_out_L;
+    dc_last_in_L = inL; dc_last_out_L = dc_out_L; inL = dc_out_L;
+    
+    dc_out_R = inR - dc_last_in_R + dc_coeff * dc_last_out_R;
+    dc_last_in_R = inR; dc_last_out_R = dc_out_R; inR = dc_out_R;
+
+    // Internal Saturation Comp (Only on WET path, band limited)
+    inL *= auto_comp_factor;
+    inR *= auto_comp_factor;
+    
+    // RECOMBINE: Add the clean split bands back to the processed mids
+    inL += dry_bypass_L;
+    inR += dry_bypass_R;
+
+    // Mix (Combines Boosted Dry + Processed Full Spectrum)
+    outL = (dryL * (1.0 - mix_percent)) + (inL * mix_percent);
+    outR = (dryR * (1.0 - mix_percent)) + (inR * mix_percent);
+    
+    // GLOBAL COMPENSATION
+    // Applies Inverse Input Trim + Output Level to EVERYTHING
+    outL *= in_comp * out_gain;
+    outR *= in_comp * out_gain;
+
+    // Safety Hard Clipper
+    outL = max(-1.2, min(1.2, outL));
+    outR = max(-1.2, min(1.2, outR));
+
+    vis_out = (outL + outR) * 0.5;
+    
+    // Dither
+    noise_level = 0.0000000596; 
+    r1 = (rand(1.0) - rand(1.0)) * noise_level; 
+    r2 = (rand(1.0) - rand(1.0)) * noise_level;
+    outL += r1; outR += r2;
+
+    spl0 = outL; spl1 = outR;
+);
+
+// --- SCOPE LOGIC ---
+gfx_idx += 1;
+(gfx_idx >= gfx_scope_len) ? gfx_idx = 0;
+0[gfx_idx] = vis_in;       
+2048[gfx_idx] = vis_out;   
+
+@gfx 380 200
+// GUI
+gfx_setfont(1, "Arial", 28, 'b');
+gfx_setfont(2, "Arial", 12);
+
+// Background
+c_bg_top_r = 0.15; c_bg_top_g = 0.15; c_bg_top_b = 0.18;
+c_bg_bot_r = 0.08; c_bg_bot_g = 0.08; c_bg_bot_b = 0.10;
+
+i = 0;
+loop(gfx_h,
+    t = i / gfx_h;
+    r = c_bg_top_r * (1-t) + c_bg_bot_r * t;
+    g = c_bg_top_g * (1-t) + c_bg_bot_g * t;
+    b = c_bg_top_b * (1-t) + c_bg_bot_b * t;
+    gfx_set(r, g, b, 1);
+    gfx_line(0, i, gfx_w, i);
+    i += 1;
+);
+
+// Header
+gfx_setfont(1);
+txt_x = 15; txt_y = 12;
+gfx_set(0, 0, 0, 0.6); gfx_x = txt_x + 2; gfx_y = txt_y + 2; 
+gfx_drawstr("Oxide Glass Saturator");
+gfx_set(1.0, 0.6, 0.2, 1); gfx_x = txt_x; gfx_y = txt_y; // Amber
+gfx_drawstr("OXIDE GLASS SATURATOR");
+gfx_setfont(2); gfx_set(0.6, 0.6, 0.6, 1);
+
+// Scope
+scope_x = 10; scope_y = 50;
+scope_w = gfx_w - 20; scope_h = gfx_h - 60;
+center_y = scope_y + (scope_h * 0.5);
+
+gfx_set(0, 0, 0, 0.4); gfx_rect(scope_x, scope_y, scope_w, scope_h);
+gfx_set(1, 1, 1, 0.1);
+gfx_line(scope_x, center_y, scope_x + scope_w, center_y);
+
+scale_y = scope_h * 0.4; x_scale = scope_w / gfx_scope_len;
+
+// Draw Input
+gfx_set(1, 1, 1, 0.2); 
+gfx_x = scope_x; gfx_y = center_y; i = 0;
+loop(gfx_scope_len,
+    val = 0[i]; val = max(-1.1, min(1.1, val));
+    y = center_y - (val * scale_y);
+    gfx_lineto(scope_x + (i * x_scale), y);
+    i += 1;
+);
+
+// Draw Output (Amber Glow)
+gfx_set(1.0, 0.6, 0.2, 0.9); 
+gfx_x = scope_x; gfx_y = center_y; i = 0;
+loop(gfx_scope_len,
+    val = 2048[i]; val = max(-1.1, min(1.1, val));
+    y = center_y - (val * scale_y);
+    gfx_lineto(scope_x + (i * x_scale), y);
+    i += 1;
+);
+
+// Bypass Button
+btn_rad = 8; btn_cx = gfx_w - 25; btn_cy = 25;
+(mouse_cap & 1) ? (
+    (mouse_x >= btn_cx - 15 && mouse_x <= btn_cx + 15 && mouse_y >= btn_cy - 15 && mouse_y <= btn_cy + 15) ? (
+        (mouse_last_state == 0) ? (
+             slider12 = 1 - slider12; bypass_state = slider12; slider_automate(slider12); 
+        );
+        mouse_last_state = 1;
+    ) : ( mouse_last_state = 1; );
+) : ( mouse_last_state = 0; );
+
+(slider12 == 1) ? gfx_set(0.8, 0.2, 0.2, 1) : gfx_set(0.3, 0.8, 0.3, 1);
+gfx_circle(btn_cx, btn_cy, btn_rad, 1);
+gfx_set(1,1,1,0.8); gfx_x = btn_cx - 20; gfx_y = btn_cy + 12;
+gfx_drawstr(slider12 ? "BYPASS" : "ACTIVE");
