@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="17510e09efd1014871158cdb1f6f5cb30c194b5f">
+<index version="1" name="DocShadrach FXs" commit="d2a72003df36be6c8df69f5c4b9e9fda863001a6">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -427,6 +427,22 @@ Channel Compressor based on the dynamics and behavior of the SSL 4000 E/G Series
     <version name="1.0.2" author="Doc Shadrach" time="2026-01-13T07:00:00Z">
      <changelog><![CDATA[The input and output pins are now declared.]]></changelog>
     <source file="The_SSL-Style_Ch_Comp.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/44c57049ef043c3a06a2bdb03bcac6cf4a120d4e/The_SSL-Style_Ch_Comp.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="Oxide_Glass_Saturator.jsfx" type="effect" desc="Oxide Glass Saturator (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+Oxide Glass Saturator
+======================
+Author: Doc Shadrach
+
+A combination of tube and tape saturation.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2026-01-19T11:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="Oxide_Glass_Saturator.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/d2a72003df36be6c8df69f5c4b9e9fda863001a6/Oxide_Glass_Saturator.jsfx</source>
     </version>
     </reapack>
   
