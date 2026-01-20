@@ -326,7 +326,7 @@ Professional 180-Channel 3D Console Emulator.
     </version>
     <version name="2.9.1" author="Doc Shadrach" time="2026-01-20T07:00:00Z">
      <changelog><![CDATA[Returning to the default setting for Bus Calibration: Normal.]]></changelog>
-    <source file="The_Analog_Molecule.jsfx">hhttps://raw.githubusercontent.com/DocShadrach/MyReaperFXs/a12fdbc4552e9d2c2f49623a4dd93a83e153c046/The_Analog_Molecule.jsfx</source>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/a12fdbc4552e9d2c2f49623a4dd93a83e153c046/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
 
