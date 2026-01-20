@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.8.1
+// version: 1.9
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -211,13 +211,15 @@ gmem[18] != last_global_inertia ? (
 
 // Global OS logic removed
 
-drift_mod = sin(time_precise() * 0.05) * 0.001 + (1.0 - gmem[20]) * 0.0025; 
+// FIX v1.9: Replaced time_precise() with play_position for deterministic offline rendering
+drift_mod = sin(play_position * 0.05) * 0.001 + (1.0 - gmem[20]) * 0.0025; 
 
 t_topo == 1 ? (
   g_tick = atomic_add(gmem[100], 1);
   any_solo = 0;
   ki = 0; loop(8,
-    active_map[ki] = (g_tick - gmem[200 + ki] < 5) ? 1 : 0;
+    // FIX v1.9: Increased tolerance from 5 to 100 to prevent dropouts during fast offline render
+    active_map[ki] = (g_tick - gmem[200 + ki] < 100) ? 1 : 0;
     stem_solo[ki] ? any_solo = 1;
     ki += 1;
   );
