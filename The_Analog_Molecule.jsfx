@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.9
+// version: 2.9.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -18,7 +18,7 @@ options:gmem=AnalogMoleculeHybrid
 
 slider1:t_id=1<1,180,1>Analog Channel ID
 slider2:t_topo=0<0,2,1{Channel (Discrete),Bus (Transformer),Master (Main Leader)}>Topology
-slider3:t_calib_mode=1<0,1,1{Hot (0dB),Normal (-4dB)}>Bus Calibration
+slider3:t_calib_mode=0<0,1,1{Normal (-4dB),Hot (0dB)}>Bus Calibration
 slider4:t_flux=20<0,100,0.1>3D Flux (Phase Depth) %
 slider5:t_thermal=20<0,100,0.1>Thermal Bloom (Inertia) %
 slider6:t_analog=12<0,100,0.1>Analog Texture (Interstage) %
@@ -356,7 +356,7 @@ unit_seed = t_id / 180;
 cluster_id = floor((t_id - 1) / 18); 
 
 topo_offset = 0.0;
-t_topo == 1 ? ( topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; );
+t_topo == 1 ? ( topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; );
 t_topo == 2 ? topo_offset = -8.0; 
 
 target_calib = 10^((t_drive + topo_offset) / 20);
@@ -533,7 +533,7 @@ last_link_state = t_link_on;
 t_topo == 2 ? ( gmem[30] = instance_id; gmem[31] += 1; has_master = 1; gmem[23] = t_xt_mode; ) : ( gmem[30] == instance_id ? gmem[30] = 0; );
 block_duration = samplesblock * inv_srate;
 gmem[31] != last_h_tick ? ( has_master = 1; last_h_tick = gmem[31]; m_watchdog_time = 0; ) : ( m_watchdog_time += block_duration; m_watchdog_time > 0.5 ? has_master = 0; );
-t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); );
+t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); );
 
 
 // --- UNIFIED GLOBAL SYNC (DOUBLE TRACKER + WARMUP LOCK) v2.6.7 ---
@@ -642,7 +642,7 @@ xt_gain = 10^(target_xt_db/20);
 // RE-SYNC Offsets after potential update
 (t_calib_mode != last_local_calib_chk) ? (
   last_local_calib_chk = t_calib_mode;
-  t_topo == 1 ? topo_offset = (t_calib_mode == 1) ? -4.0 : 0.0; t_topo == 2 ? topo_offset = -8.0; t_topo == 0 ? topo_offset = 0.0;
+  t_topo == 1 ? topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; t_topo == 2 ? topo_offset = -8.0; t_topo == 0 ? topo_offset = 0.0;
   target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
 );
 
@@ -920,7 +920,7 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     has_master == 0 ? ( gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 13, 'b'); warn_s = "WARNING: NO MASTER DETECTED (NETWORK SAG INACTIVE)"; gfx_measurestr(warn_s, ww, wh); gfx_x = 50 + (450 - ww)/2; gfx_y = 285; gfx_drawstr(warn_s); );
     id_conflict == 1 ? ( gfx_set(1, 0.2, 0.2, 1); gfx_setfont(1, "Arial", 11, 'b'); warn_text = "ID DUPLICATE!"; gfx_measurestr(warn_text, dw, dh); gfx_x = 500 - dw; gfx_y = 315; gfx_drawstr(warn_text); );
     gfx_set(1, 1, 1, 0.05); gfx_rect(50, 305, 450, 1); gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(1, "Arial", 12);
-    topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER"; cal_str = (t_topo == 1) ? (t_calib_mode == 0 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
+    topo_str = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER"; cal_str = (t_topo == 1) ? (t_calib_mode == 1 ? " | CAL: HOT" : " | CAL: NORMAL") : "";
     status_str = sprintf(#, "ID: %d | TOPO: %s%s | CLUSTER: %d", t_id, topo_str, cal_str, cluster_id + 1);
     gfx_measurestr(status_str, sw, sh); gfx_x = 50 + (450 - sw)/2; gfx_y = 315; gfx_drawstr(status_str);
     (gfx_h < 415) ? ( gfx_set(1, 0.3, 0.3, 1); gfx_setfont(1, "Arial", 11, 'b'); txt = "UI HIDDEN: EXPAND WINDOW ▼"; gfx_measurestr(txt, w, h); gfx_x = gfx_w - w - 10; gfx_y = 15; gfx_drawstr(txt); );
