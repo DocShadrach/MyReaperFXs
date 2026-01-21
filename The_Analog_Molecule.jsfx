@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 3.0
+// version: 3.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -151,6 +151,9 @@ force_refresh = 1;
 
 loading_preset = 0;
 id_conflict = 0; 
+
+// --- NEW FADE-IN FIX VAR ---
+last_play_state = -1;
 
 // State variables
 istL_A1=0; istL_B1=0; istL_A2=0; istL_B2=0; istL_A3=0; istL_B3=0;
@@ -649,6 +652,22 @@ xt_gain = 10^(target_xt_db/20);
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
 topology_interstage = t_topo == 0 ? 1.0 : 0.85; topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
+
+// --- NEW FADE-IN FIX LOGIC (Inserted safely after target calculation) ---
+current_play_state = play_state;
+(current_play_state != last_play_state && s_init_done == 1) ? (
+  // Sync all smoothed values immediately on playback state change
+  // BUT skip if we're still initializing
+  s_flux = target_flux;
+  s_thermal = target_thermal;
+  s_analog = target_analog;
+  s_calib = target_calib;
+  s_out = target_out;
+  s_bypass = target_bypass; // Critical for bypass fade fix
+
+  last_play_state = current_play_state;
+);
+// ------------------------------------------------------------------------
 
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
 energy_accum = 0; t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); ); rail_target = gmem[10];
