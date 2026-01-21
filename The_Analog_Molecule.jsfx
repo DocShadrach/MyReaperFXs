@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 2.9.1
+// version: 3.0
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -119,6 +119,7 @@ update_filters();
 rail_loss = 1.0 - exp(-inv_srate / 0.025);
 
 instance_id = rand(1000000) + 1; 
+last_global_sync = gmem[0]; // Fix for Reshuffle on Play bug
 
 // SYNC INIT v2.6.7: Force Local Values as "Last Known" to prevent zero-reset
 last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
