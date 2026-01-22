@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 3.1
+// version: 3.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -29,7 +29,7 @@ slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
 slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Master XT Mode
 // UI CONTROL VARIABLES
 slider12:t_link_on=0<0,1,1{Off,On}>-Link Active
-slider13:t_flavor=0<0,4,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering}>-Console Flavor
+slider13:t_flavor=0<0,5,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering,Reference}>-Console Flavor
 // HYBRID ENGINE SWITCH
 slider14:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod}>-Engine Mode
 
@@ -234,6 +234,11 @@ function load_flavor(flavor_id) (
     t_topo == 0 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 1 ? ( t_flux=5; t_thermal=5; t_analog=5; );
     t_topo == 2 ? ( t_flux=2; t_thermal=5; t_analog=2; t_xt_mode=2; );
+  ) : flavor_id == 5 ? ( // Reference (The Default)
+    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
+    t_topo == 0 ? ( t_flux=20; t_thermal=20; t_analog=12; );
+    t_topo == 1 ? ( t_flux=12; t_thermal=30; t_analog=15; );
+    t_topo == 2 ? ( t_flux=8; t_thermal=20; t_analog=10; t_xt_mode=0; );
   ) : ( // Custom
     topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
   );
@@ -321,6 +326,13 @@ p_init_lock == 1 ? (
      t_topo == 1 ? ( c_flx==5 && c_thm==5 && c_ana==5 ? match=1; );
      t_topo == 2 ? ( c_flx==2 && c_thm==5 && c_ana==2 && t_xt_mode=2 ? match=1; );
      match ? match_flv = 4;
+     
+     // Reference (5)
+     match = 0;
+     t_topo == 0 ? ( c_flx==20 && c_thm==20 && c_ana==12 ? match=1; );
+     t_topo == 1 ? ( c_flx==12 && c_thm==30 && c_ana==15 ? match=1; );
+     t_topo == 2 ? ( c_flx==8 && c_thm==20 && c_ana==10 && t_xt_mode==0 ? match=1; );
+     match ? match_flv = 5;
      
      t_flavor = match_flv;
      slider_automate(t_flavor);
@@ -491,6 +503,10 @@ last_link_state = t_link_on;
          t_topo == 0 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode=2 ? chk_match=1; );
+       ) : net_flavor == 5 ? ( // Reference
+         t_topo == 0 ? ( b_flx==20 && b_thm==20 && b_ana==12 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==12 && b_thm==30 && b_ana==15 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==8 && b_thm==20 && b_ana==10 && t_xt_mode==0 ? chk_match=1; );
        );
        
        chk_match == 0 ? perform_load = 0;
@@ -955,14 +971,14 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
       draw_trim_button(160, bar_y + 45, 65, 20, 0, "< TRIM"); (mouse_cap & 1 && !last_cap && mouse_x >= 160 && mouse_x <= 225 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? ( st_ch ? atomic_add(gmem[1000 + 3], -0.025); st_bus ? atomic_add(gmem[2000 + 3], -0.025); st_mtr ? atomic_add(gmem[3000 + 3], -0.025); );
       draw_trim_button(235, bar_y + 45, 65, 20, 0, "TRIM >"); (mouse_cap & 1 && !last_cap && mouse_x >= 235 && mouse_x <= 300 && mouse_y >= bar_y+45 && mouse_y <= bar_y+65) ? ( st_ch ? atomic_add(gmem[1000 + 3], 0.025); st_bus ? atomic_add(gmem[2000 + 3], 0.025); st_mtr ? atomic_add(gmem[3000 + 3], 0.025); );
     );
-    flav_name = (t_flavor == 0) ? "CUSTOM" : (t_flavor == 1) ? "BRITISH A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : "MODERN";
+    flav_name = (t_flavor == 0) ? "CUSTOM" : (t_flavor == 1) ? "BRITISH A" : (t_flavor == 2) ? "SOLID STATE E" : (t_flavor == 3) ? "US DISCRETE" : (t_flavor == 4) ? "MODERN" : "REFERENCE";
     r_b = 0; g_b = 0; b_b = 0;
-    t_flavor == 1 ? (r_b=0.8; g_b=0.2; b_b=0.2); t_flavor == 2 ? (r_b=0.9; g_b=0.9; b_b=0.2); t_flavor == 3 ? (r_b=0.2; g_b=0.6; b_b=1.0); t_flavor == 4 ? (r_b=0.8; g_b=0.4; b_b=0.8);
+    t_flavor == 1 ? (r_b=0.8; g_b=0.2; b_b=0.2); t_flavor == 2 ? (r_b=0.9; g_b=0.9; b_b=0.2); t_flavor == 3 ? (r_b=0.2; g_b=0.6; b_b=1.0); t_flavor == 4 ? (r_b=0.8; g_b=0.4; b_b=0.8); t_flavor == 5 ? (r_b=0.7; g_b=0.7; b_b=0.7);
     draw_button(330, bar_y + 15, 190, 50, 0, flav_name, 0, 0, 0);
     t_flavor > 0 ? ( gfx_set(r_b, g_b, b_b, 1); gfx_rect(330, bar_y + 62, 190, 3); );
     gfx_set(1, 1, 1, 0.5); gfx_triangle(490, bar_y+35, 500, bar_y+35, 495, bar_y+45);
     (mouse_cap & 1 && !last_cap && mouse_x >= 330 && mouse_x <= 520 && mouse_y >= bar_y+15 && mouse_y <= bar_y+65) ? (
-      gfx_x = mouse_x; gfx_y = mouse_y; sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern");
+      gfx_x = mouse_x; gfx_y = mouse_y; sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern|Reference");
       sel > 0 ? ( 
          last_flavor = -1; // FORCE UPDATE IF SAME FLAVOR
          t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); 
