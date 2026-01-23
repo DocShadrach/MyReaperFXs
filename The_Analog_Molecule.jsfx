@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 3.2
+// version: 3.3
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -707,6 +707,8 @@ t_topo == 2 ? (
   );
 );
 
+safe_bank_ptr = gmem[PTR_BANK];
+
 @sample
 rawL = spl0; rawR = spl1;
 s_flux = s_flux * smooth + target_flux * (1 - smooth);
@@ -761,7 +763,7 @@ meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_i
     // Hit global memory logic
     (xt_cnt >= batch_target) ? (
         // Calculate Pointers based on the bank selected by Master in @block
-        read_bank_idx = gmem[PTR_BANK];
+        read_bank_idx = safe_bank_ptr;
         write_bank_idx = 1 - read_bank_idx;
         
         read_offset = read_bank_idx * BANK_STRIDE; 
