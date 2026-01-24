@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 3.3
+// version: 3.4
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -22,24 +22,27 @@ slider3:t_calib_mode=0<0,1,1{Normal (-4dB),Hot (0dB)}>Bus Calibration
 slider4:t_flux=20<0,100,0.1>3D Flux (Phase Depth) %
 slider5:t_thermal=20<0,100,0.1>Thermal Bloom (Inertia) %
 slider6:t_analog=12<0,100,0.1>Analog Texture (Interstage) %
+
+// --- DRIVE SECTION (GHOST SLIDER PAIR) ---
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
-slider8:t_out_gain=0<-12,12,0.1>Output Gain (dB)
-slider9:t_bypass=0<0,1,1{Active,Bypassed}>Global State
-slider10:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
-slider11:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Master XT Mode
-// UI CONTROL VARIABLES
-slider12:t_link_on=0<0,1,1{Off,On}>-Link Active
-slider13:t_flavor=0<0,5,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering,Reference}>-Console Flavor
-// HYBRID ENGINE SWITCH
-slider14:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod}>-Engine Mode
+slider8:t_drive_g=0<-12,12,0.1>Global Calib / Drive (dB)
+
+// --- SHIFTED CONTROLS (Moved down by 1 slot) ---
+slider9:t_out_gain=0<-12,12,0.1>Output Gain (dB)
+slider10:t_bypass=0<0,1,1{Active,Bypassed}>Global State
+slider11:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
+slider12:t_xt_mode=0<0,2,1{Vintage (-75dB),Modern (-95dB),Boutique (-115dB)}>-Master XT Mode
+slider13:t_link_on=0<0,1,1{Off,On}>-Link Active
+slider14:t_flavor=0<0,5,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering,Reference}>-Console Flavor
+slider15:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod}>-Engine Mode
 
 // --- V2.2 FILTERS (LOCAL ONLY) ---
-slider15:t_hpf=0<0,500,1>High Pass Filter (Hz)
-slider16:t_lpf=20000<2000,20000,10>Low Pass Filter (Hz)
-slider17:t_filters_on=1<0,1,1{Off,On}>Filters Active (Pre-Sat)
+slider16:t_hpf=0<0,500,1>High Pass Filter (Hz)
+slider17:t_lpf=20000<2000,20000,10>Low Pass Filter (Hz)
+slider18:t_filters_on=1<0,1,1{Off,On}>Filters Active (Pre-Sat)
 
 // --- HIDDEN CPU TOGGLE ---
-slider18:t_xt_res=0<0,1,1{Lite,Heavy}>-XT Resolution
+slider19:t_xt_res=0<0,1,1{Lite,Heavy}>-XT Resolution
 
 // --- FILTER PRESETS (Hidden Memory for TCP UI) ---
 slider30:40<0,1000,1>-HPF Btn 1
@@ -151,6 +154,7 @@ force_refresh = 1;
 
 loading_preset = 0;
 id_conflict = 0; 
+global_drive_offset = 0; 
 
 // --- NEW FADE-IN FIX VAR ---
 last_play_state = -1;
@@ -260,7 +264,27 @@ function load_flavor(flavor_id) (
 slider_show(t_link_on, 0);
 slider_show(t_flavor, 0);
 slider_show(t_engine_mode, 0); 
-slider_show(t_xt_res, 0); // Hide new toggle
+slider_show(t_xt_res, 0); 
+
+// --- GHOST SLIDER LOGIC (STABILITY FIX) ---
+// Sync values depending on which slider is visible and automate changes
+t_topo == 2 ? (
+   (t_drive != t_drive_g) ? (
+      t_drive = t_drive_g; // Master logic rules
+      slider7 = t_drive;   // Keep hidden slider updated
+      slider_automate(t_drive); // UPDATE HOST
+   );
+) : (
+   (t_drive_g != t_drive) ? (
+      t_drive_g = t_drive; // Channel logic rules
+      slider8 = t_drive;   // Keep hidden slider updated
+      slider_automate(t_drive_g); // UPDATE HOST
+   );
+);
+
+// Toggle Visibility based on Topology
+slider_show(t_drive, t_topo != 2);   // Show normal drive (Slider 7) if NOT master
+slider_show(t_drive_g, t_topo == 2); // Show global drive (Slider 8) if IS master
 
 // --- SAFETY SNAP: Forbidden Zone Fix ---
 // If the user manually sets slider between 1 and 19 via Generic UI, snap it.
@@ -475,7 +499,8 @@ last_link_state = t_link_on;
   (dn_flux != 0) ? ( t_flux = max(0, min(100, (to_int(t_flux) + dn_flux) / 10.0)); slider_automate(t_flux); last_flux_int = to_int(t_flux); net_flux_mirror = g_flux; t_flavor = 0; slider_automate(t_flavor); );
   (dn_thermal != 0) ? ( t_thermal = max(0, min(100, (to_int(t_thermal) + dn_thermal) / 10.0)); slider_automate(t_thermal); last_thermal_int = to_int(t_thermal); net_thermal_mirror = g_thermal; t_flavor = 0; slider_automate(t_flavor); );
   (dn_analog != 0) ? ( t_analog = max(0, min(100, (to_int(t_analog) + dn_analog) / 10.0)); slider_automate(t_analog); last_analog_int = to_int(t_analog); net_analog_mirror = g_analog; t_flavor = 0; slider_automate(t_flavor); );
-  (dn_trim != 0) ? ( t_out_gain += dn_trim; slider_automate(t_out_gain); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); last_trim_int = to_int(t_out_gain); net_trim_mirror = g_trim; );
+  // --- BUGFIX: Removed premature target_out calculation ---
+  (dn_trim != 0) ? ( t_out_gain += dn_trim; slider_automate(t_out_gain); last_trim_int = to_int(t_out_gain); net_trim_mirror = g_trim; );
 
   net_flavor = gmem[my_bank + 4];
   (net_flavor != 0 && net_flavor != my_flavor_cmd) ? (
@@ -553,7 +578,8 @@ last_link_state = t_link_on;
 t_topo == 2 ? ( gmem[30] = instance_id; gmem[31] += 1; has_master = 1; gmem[23] = t_xt_mode; ) : ( gmem[30] == instance_id ? gmem[30] = 0; );
 block_duration = samplesblock * inv_srate;
 gmem[31] != last_h_tick ? ( has_master = 1; last_h_tick = gmem[31]; m_watchdog_time = 0; ) : ( m_watchdog_time += block_duration; m_watchdog_time > 0.5 ? has_master = 0; );
-t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); );
+// --- BUGFIX: Cleaned redundant target_out here too ---
+t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; );
 
 
 // --- UNIFIED GLOBAL SYNC (DOUBLE TRACKER + WARMUP LOCK) v2.6.7 ---
@@ -663,8 +689,19 @@ xt_gain = 10^(target_xt_db/20);
 (t_calib_mode != last_local_calib_chk) ? (
   last_local_calib_chk = t_calib_mode;
   t_topo == 1 ? topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; t_topo == 2 ? topo_offset = -8.0; t_topo == 0 ? topo_offset = 0.0;
-  target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
+  // target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); // MOVED TO GLOBAL CALC BELOW
 );
+
+// --- GLOBAL DRIVE CALIBRATION (NEW v3.4) ---
+t_topo == 2 ? ( gmem[26] = t_drive; ); // Master broadcasts its Drive
+has_master ? ( global_drive_offset = gmem[26]; ) : ( global_drive_offset = 0; );
+
+// Calculate effective drive (Master doesn't double-apply, others add offset)
+eff_drive = (t_topo == 2) ? t_drive : (t_drive + global_drive_offset);
+
+// Always update targets based on new effective drive
+target_calib = 10^((eff_drive + topo_offset) / 20);
+target_out = 10^((t_out_gain - eff_drive - topo_offset) / 20);
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
 topology_interstage = t_topo == 0 ? 1.0 : 0.85; topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
