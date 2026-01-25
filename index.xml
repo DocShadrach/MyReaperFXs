@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="138eb11ed22d3b08323ba9577b010b630927604b">
+<index version="1" name="DocShadrach FXs" commit="0f668411237060445e42a3dc98300f4de8ae87e0">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -351,6 +351,10 @@ Professional 180-Channel 3D Console Emulator.
     <version name="3.4.0" author="Doc Shadrach" time="2026-01-24T07:00:00Z">
      <changelog><![CDATA[Added Global Drive control for Master topology. BE CAREFUL: Slider indexes shifted, causing mismatched parameter values when loading older sessions.]]></changelog>
     <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/786a293141ad97d61051beb38d8e49201955ebd3/The_Analog_Molecule.jsfx</source>
+    </version>
+    <version name="3.4.1" author="Doc Shadrach" time="2026-01-25T07:00:00Z">
+     <changelog><![CDATA[Some fixes to added safety.]]></changelog>
+    <source file="The_Analog_Molecule.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/0f668411237060445e42a3dc98300f4de8ae87e0/The_Analog_Molecule.jsfx</source>
     </version>
     </reapack>
 
