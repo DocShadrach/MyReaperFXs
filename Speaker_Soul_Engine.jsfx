@@ -1,11 +1,13 @@
 desc: Speaker Soul Engine (DocShadrach)
 // author: Doc Shadrach
-// version: 1.1 (Physics Improved)
+// version: 1.2
 // about: High-end mechanical speaker modeling.
 //
-// Updates v1.1: 
-// - Added Detector Weighting (Low frequencies drive the stress, highs do not).
-// - Added "Dirty Thump" saturation for realistic air movement simulation.
+// Copyright (c) 2026 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
 
 // SLIDERS
 slider1:t_stress=30<0,100,0.5>Speaker Stress (%)
@@ -25,6 +27,10 @@ out_pin:right output
 @init
 // Physical and DSP constants
 inv_srate = 1/srate;
+
+// --- DENORMAL PROTECTION CONSTANT ---
+denorm = pow(10, -30);
+
 // Cone damping: aggressive attack, inertia-based release (95ms)
 atk = exp(-inv_srate / 0.004);
 rel = exp(-inv_srate / 0.095); 
@@ -39,7 +45,7 @@ stateL = 0; stateR = 0;
 hL1 = 0; hL2 = 0; hR1 = 0; hR2 = 0;
 preL = 0; preR = 0;
 
-// NEW: Detector Filter State
+// Detector Filter State
 detL = 0; detR = 0;
 
 // Smoothed values initialization
@@ -61,11 +67,15 @@ th_lp = exp(-2 * $pi * 130 * inv_srate);
 // Anti-aliasing pre-filter (smooth cut at 19kHz)
 aa_lp = exp(-2 * $pi * 19000 * inv_srate);
 
-// NEW: Detector Weighting Filter (800Hz Low Pass)
+// Detector Weighting Filter (800Hz Low Pass)
 // Only frequencies below this will push the cone hard.
 det_lp = exp(-2 * $pi * 800 * inv_srate);
 
 @sample
+// --- DENORMAL INJECTION ---
+spl0 += denorm;
+spl1 += denorm;
+
 // 1. PARAMETER SMOOTHING (Anti-click engine)
 s_calib = s_calib * smooth_coeff + target_calib * (1 - smooth_coeff);
 s_stress = s_stress * smooth_coeff + target_stress * (1 - smooth_coeff);
@@ -124,7 +134,7 @@ dL = 18000 - (stL * s_brk * 12500); dR = 18000 - (stR * s_brk * 12500);
 cL = exp(-2 * $pi * dL * inv_srate); cR = exp(-2 * $pi * dR * inv_srate);
 stateL = stateL * cL + sL * (1 - cL); stateR = stateR * cR + sR * (1 - cR);
 
-// 7. MECHANICAL THUMP (Air pressure reconstruction - Improved)
+// 7. MECHANICAL THUMP (Air pressure reconstruction)
 lpL = lpL * th_lp + dryL * (1 - th_lp); lpR = lpR * th_lp + dryR * (1 - th_lp);
 // Raw thump signal
 raw_tL = lpL * s_tgain * (stL * 1.5); 
@@ -145,7 +155,7 @@ gfx_envL = envL; gfx_envR = envR;
 gfx_tamingL = (18000 - dL) / 12500; gfx_tamingR = (18000 - dR) / 12500;
 
 @gfx 560 170
-// PROFESSIONAL UI DESIGN
+// GUI DESIGN
 gfx_clear = 15 + 15*256 + 18*65536; 
 
 function draw_ui(val, tame, x, y, label) (
@@ -168,7 +178,7 @@ function draw_ui(val, tame, x, y, label) (
 
 // Plugin Title
 gfx_set(1, 1, 1, 0.15); gfx_x = 180; gfx_y = 15; gfx_setfont(1, "Arial", 18, 'b');
-gfx_drawstr("SPEAKER SOUL ENGINE v1.1");
+gfx_drawstr("SPEAKER SOUL ENGINE v1.2");
 
 // Render Dual Mono Visuals
 draw_ui(gfx_envL, gfx_tamingL, 90, 55, "LEFT");
