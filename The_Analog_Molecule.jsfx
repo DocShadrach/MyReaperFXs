@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 3.4
+// version: 3.4.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -27,7 +27,7 @@ slider6:t_analog=12<0,100,0.1>Analog Texture (Interstage) %
 slider7:t_drive=0<-12,12,0.1>Compensated Drive (dB)
 slider8:t_drive_g=0<-12,12,0.1>Global Calib / Drive (dB)
 
-// --- SHIFTED CONTROLS (Moved down by 1 slot) ---
+// --- SHIFTED CONTROLS ---
 slider9:t_out_gain=0<-12,12,0.1>Output Gain (dB)
 slider10:t_bypass=0<0,1,1{Active,Bypassed}>Global State
 slider11:t_xtalk=0<0,1,1{Off,On}>Analog Crosstalk
@@ -114,6 +114,7 @@ smooth = exp(-inv_srate / 0.045);
 thermal_rel = exp(-inv_srate / 2.5);
 
 // --- DENORMAL PROTECTION CONSTANT ---
+// Changed to explicit pow() for clarity and safety
 denorm = pow(10, -30);
 
 update_filters();
@@ -122,15 +123,15 @@ update_filters();
 rail_loss = 1.0 - exp(-inv_srate / 0.025);
 
 instance_id = rand(1000000) + 1; 
-last_global_sync = gmem[0]; // Fix for Reshuffle on Play bug
+last_global_sync = gmem[0]; 
 
-// SYNC INIT v2.6.7: Force Local Values as "Last Known" to prevent zero-reset
+// SYNC INIT
 last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
 last_net_xtalk = t_xtalk;   last_loc_xtalk = t_xtalk;
 last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
 last_net_engine = t_engine_mode; last_loc_engine = t_engine_mode;
 last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
-last_net_res = t_xt_res; last_loc_res = t_xt_res; // NEW for v2.9
+last_net_res = t_xt_res; last_loc_res = t_xt_res;
 
 // STARTUP LOCK TIMER
 startup_lock = 0;
@@ -178,7 +179,7 @@ last_xt_leak = 0;
 xt_tick = 0;
 
 xt_lp=0; xt_hp=0;
-xt_gain = 10^(-75/20); 
+xt_gain = pow(10, -75/20); // Safe Pow
 
 // Filter State Variables
 hpf_x1L=0; hpf_x2L=0; hpf_y1L=0; hpf_y2L=0;
@@ -192,11 +193,10 @@ last_hpf = -1; last_lpf = -1; last_filt_state = -1;
 // MEMORY MAP CONSTANTS & OPTIMIZATIONS
 PTR_BANK = 15;      
 BANK_A_OFFSET = 200; 
-// OPTIMIZATION A: Memory Padding for False Sharing (ALWAYS ON)
 CLUSTER_STRIDE = 16; 
 BANK_STRIDE = 400;   
 
-// OPTIMIZATION B: Batch Processing Config (Controlled by t_xt_res)
+// OPTIMIZATION B: Batch Processing
 xt_accum = 0;        
 xt_cnt = 0;          
 xt_smooth = exp(-1/(srate*0.005)); 
@@ -248,7 +248,6 @@ function load_flavor(flavor_id) (
   );
 
   slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog); 
-  // REMOVED: slider_automate(t_calib_mode); 
   slider_automate(t_xt_mode);
   
   last_flux_int = to_int(t_flux);
@@ -266,28 +265,28 @@ slider_show(t_flavor, 0);
 slider_show(t_engine_mode, 0); 
 slider_show(t_xt_res, 0); 
 
-// --- GHOST SLIDER LOGIC (STABILITY FIX) ---
-// Sync values depending on which slider is visible and automate changes
-t_topo == 2 ? (
-   (t_drive != t_drive_g) ? (
-      t_drive = t_drive_g; // Master logic rules
-      slider7 = t_drive;   // Keep hidden slider updated
-      slider_automate(t_drive); // UPDATE HOST
-   );
-) : (
-   (t_drive_g != t_drive) ? (
-      t_drive_g = t_drive; // Channel logic rules
-      slider8 = t_drive;   // Keep hidden slider updated
-      slider_automate(t_drive_g); // UPDATE HOST
-   );
+// --- GHOST SLIDER LOGIC (SAFE SYNC) ---
+s_init_done ? (
+  t_topo == 2 ? (
+     (t_drive != t_drive_g) ? (
+        t_drive = t_drive_g; // Master logic rules
+        slider7 = t_drive;   
+        slider_automate(t_drive);
+     );
+  ) : (
+     (t_drive_g != t_drive) ? (
+        t_drive_g = t_drive; // Channel logic rules
+        slider8 = t_drive;   
+        slider_automate(t_drive_g);
+     );
+  );
 );
 
 // Toggle Visibility based on Topology
-slider_show(t_drive, t_topo != 2);   // Show normal drive (Slider 7) if NOT master
-slider_show(t_drive_g, t_topo == 2); // Show global drive (Slider 8) if IS master
+slider_show(t_drive, t_topo != 2);   
+slider_show(t_drive_g, t_topo == 2); 
 
 // --- SAFETY SNAP: Forbidden Zone Fix ---
-// If the user manually sets slider between 1 and 19 via Generic UI, snap it.
 (t_hpf > 0 && t_hpf < 20) ? (
   t_hpf = 20; 
   slider_automate(t_hpf);
@@ -299,13 +298,8 @@ cur_flux_int = to_int(t_flux);
 cur_thermal_int = to_int(t_thermal);
 cur_analog_int = to_int(t_analog);
 
-// PUSH LOCAL ENGINE CHANGE TO GLOBAL -> MOVED DOWN TO PROTECTED BLOCK
-// gmem[24] = t_engine_mode;
-
 // DIRTY STATE CHECK (PROTECTED)
 p_init_lock == 1 ? (
-    // If we are initializing/resetting, don't trigger custom mode.
-    // Instead, sync the trackers to the current sliders.
     last_flux_int = cur_flux_int;
     last_thermal_int = cur_thermal_int;
     last_analog_int = cur_analog_int;
@@ -318,7 +312,6 @@ p_init_lock == 1 ? (
 
 // DETECT LINK TOGGLE
 (t_link_on != last_link_state) ? (
-  // NEW LOGIC v2.2.3: Check parameter match when turning ON to determine flavor name
   (t_link_on == 1) ? (
      match_flv = 0;
      c_flx = to_int(t_flux); c_thm = to_int(t_thermal); c_ana = to_int(t_analog);
@@ -360,7 +353,6 @@ p_init_lock == 1 ? (
      
      t_flavor = match_flv;
      slider_automate(t_flavor);
-     // Update last_flavor to avoid redundant triggers downstream
      last_flavor = t_flavor;
   );
 
@@ -390,8 +382,6 @@ t_topo != last_topo ? (
   force_refresh = 1;
 );
 
-// BYPASS / SYNC LOGIC MOVED TO @BLOCK SECTION TO PREVENT FEEDBACK LOOPS
-
 unit_seed = t_id / 180;
 cluster_id = floor((t_id - 1) / 18); 
 
@@ -399,8 +389,9 @@ topo_offset = 0.0;
 t_topo == 1 ? ( topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; );
 t_topo == 2 ? topo_offset = -8.0; 
 
-target_calib = 10^((t_drive + topo_offset) / 20);
-target_out = 10^((t_out_gain - t_drive - topo_offset) / 20);
+// Initial Target Calc (Safe Pow)
+target_calib = pow(10, (t_drive + topo_offset) / 20);
+target_out = pow(10, (t_out_gain - t_drive - topo_offset) / 20);
 target_bypass = 1.0 - t_bypass; 
 
 @block
@@ -499,36 +490,40 @@ last_link_state = t_link_on;
   (dn_flux != 0) ? ( t_flux = max(0, min(100, (to_int(t_flux) + dn_flux) / 10.0)); slider_automate(t_flux); last_flux_int = to_int(t_flux); net_flux_mirror = g_flux; t_flavor = 0; slider_automate(t_flavor); );
   (dn_thermal != 0) ? ( t_thermal = max(0, min(100, (to_int(t_thermal) + dn_thermal) / 10.0)); slider_automate(t_thermal); last_thermal_int = to_int(t_thermal); net_thermal_mirror = g_thermal; t_flavor = 0; slider_automate(t_flavor); );
   (dn_analog != 0) ? ( t_analog = max(0, min(100, (to_int(t_analog) + dn_analog) / 10.0)); slider_automate(t_analog); last_analog_int = to_int(t_analog); net_analog_mirror = g_analog; t_flavor = 0; slider_automate(t_flavor); );
-  // --- BUGFIX: Removed premature target_out calculation ---
-  (dn_trim != 0) ? ( t_out_gain += dn_trim; slider_automate(t_out_gain); last_trim_int = to_int(t_out_gain); net_trim_mirror = g_trim; );
+  
+  // --- SAFETY CLAMP IN LINK SYSTEM ---
+  (dn_trim != 0) ? ( 
+      t_out_gain += dn_trim; 
+      t_out_gain = max(-12, min(12, t_out_gain)); // Clamp!
+      slider_automate(t_out_gain); 
+      last_trim_int = to_int(t_out_gain); 
+      net_trim_mirror = g_trim; 
+  );
 
   net_flavor = gmem[my_bank + 4];
   (net_flavor != 0 && net_flavor != my_flavor_cmd) ? (
-    
-    // --- SAFETY CHECK FOR RESET / STOP-PLAY ---
-    // Ensure we don't blindly load a flavor if local parameters don't match it
     perform_load = 1;
     (my_flavor_cmd == 0 && net_flavor > 0 && startup_lock < 30) ? (
        chk_match = 0;
        b_flx = to_int(t_flux); b_thm = to_int(t_thermal); b_ana = to_int(t_analog);
        
-       net_flavor == 1 ? ( // British Class A
+       net_flavor == 1 ? ( 
          t_topo == 0 ? ( b_flx==35 && b_thm==40 && b_ana==25 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==25 && b_thm==50 && b_ana==30 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==15 && b_thm==30 && b_ana==20 && t_xt_mode==0 ? chk_match=1; );
-       ) : net_flavor == 2 ? ( // Solid State E
+       ) : net_flavor == 2 ? ( 
          t_topo == 0 ? ( b_flx==20 && b_thm==20 && b_ana==15 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==15 && b_thm==35 && b_ana==20 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==10 && b_thm==20 && b_ana==12 && t_xt_mode==1 ? chk_match=1; );
-       ) : net_flavor == 3 ? ( // US Discrete
+       ) : net_flavor == 3 ? ( 
          t_topo == 0 ? ( b_flx==10 && b_thm==10 && b_ana==10 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==10 && b_thm==15 && b_ana==12 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==5 && b_thm==10 && b_ana==8 && t_xt_mode==0 ? chk_match=1; );
-       ) : net_flavor == 4 ? ( // Modern
+       ) : net_flavor == 4 ? ( 
          t_topo == 0 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode=2 ? chk_match=1; );
-       ) : net_flavor == 5 ? ( // Reference
+       ) : net_flavor == 5 ? ( 
          t_topo == 0 ? ( b_flx==20 && b_thm==20 && b_ana==12 ? chk_match=1; );
          t_topo == 1 ? ( b_flx==12 && b_thm==30 && b_ana==15 ? chk_match=1; );
          t_topo == 2 ? ( b_flx==8 && b_thm==20 && b_ana==10 && t_xt_mode==0 ? chk_match=1; );
@@ -536,7 +531,6 @@ last_link_state = t_link_on;
        
        chk_match == 0 ? perform_load = 0;
     );
-    // ------------------------------------------
 
     perform_load ? (
       new_flav = (net_flavor == -1) ? 0 : net_flavor;
@@ -578,22 +572,17 @@ last_link_state = t_link_on;
 t_topo == 2 ? ( gmem[30] = instance_id; gmem[31] += 1; has_master = 1; gmem[23] = t_xt_mode; ) : ( gmem[30] == instance_id ? gmem[30] = 0; );
 block_duration = samplesblock * inv_srate;
 gmem[31] != last_h_tick ? ( has_master = 1; last_h_tick = gmem[31]; m_watchdog_time = 0; ) : ( m_watchdog_time += block_duration; m_watchdog_time > 0.5 ? has_master = 0; );
-// --- BUGFIX: Cleaned redundant target_out here too ---
 t_topo == 2 && gmem[30] != instance_id ? ( t_topo = 1; slider_automate(t_topo); topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; );
 
 
 // --- UNIFIED GLOBAL SYNC (DOUBLE TRACKER + WARMUP LOCK) v2.6.7 ---
-// WARM-UP PHASE: For the first ~0.5s (30 blocks), LOCK the read logic.
-// Master FORCES saved values to network. Channel WAITS.
 startup_lock < 30 ? (
    startup_lock += 1;
    
    t_topo == 2 ? (
-      // MASTER MODE: Aggressively broadcast saved state to network
       gmem[7] = t_bypass; gmem[21] = t_xtalk; gmem[22] = t_calib_mode;
       gmem[23] = t_xt_mode; gmem[24] = t_engine_mode; gmem[25] = t_xt_res;
       
-      // Sync trackers to avoid jump after unlock
       last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
       last_net_xtalk = t_xtalk; last_loc_xtalk = t_xtalk;
       last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
@@ -601,8 +590,6 @@ startup_lock < 30 ? (
       last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
       last_net_res = t_xt_res; last_loc_res = t_xt_res;
    ) : (
-      // CHANNEL MODE: Do NOT read network yet (it might be empty/zero).
-      // Just keep local trackers ready.
       last_net_bypass = t_bypass; last_loc_bypass = t_bypass;
       last_net_xtalk = t_xtalk; last_loc_xtalk = t_xtalk;
       last_net_calib = t_calib_mode; last_loc_calib = t_calib_mode;
@@ -611,7 +598,7 @@ startup_lock < 30 ? (
       last_net_res = t_xt_res; last_loc_res = t_xt_res;
    );
 ) : (
-    // NORMAL OPERATION (Democratic Bus) - Enabled after warm-up
+    // NORMAL OPERATION
     
     // Bypass Sync
     current_net_bypass = gmem[7];
@@ -683,68 +670,69 @@ startup_lock < 30 ? (
 );
 
 target_xt_db = (t_xt_mode == 0) ? -75.0 : (t_xt_mode == 1) ? -95.0 : -115.0;
-xt_gain = 10^(target_xt_db/20);
+xt_gain = pow(10, target_xt_db/20); // Safe Pow
 
-// RE-SYNC Offsets after potential update
+// RE-SYNC Offsets
 (t_calib_mode != last_local_calib_chk) ? (
   last_local_calib_chk = t_calib_mode;
   t_topo == 1 ? topo_offset = (t_calib_mode == 0) ? -4.0 : 0.0; t_topo == 2 ? topo_offset = -8.0; t_topo == 0 ? topo_offset = 0.0;
-  // target_calib = 10^((t_drive + topo_offset) / 20); target_out = 10^((t_out_gain - t_drive - topo_offset) / 20); // MOVED TO GLOBAL CALC BELOW
 );
 
-// --- GLOBAL DRIVE CALIBRATION (NEW v3.4) ---
+// --- GLOBAL DRIVE CALIBRATION ---
 t_topo == 2 ? ( gmem[26] = t_drive; ); // Master broadcasts its Drive
-has_master ? ( global_drive_offset = gmem[26]; ) : ( global_drive_offset = 0; );
+has_master ? ( 
+    // SANITIZE INPUT FROM NETWORK (Clamp to reasonable values to avoid math explosion)
+    raw_g_drive = gmem[26];
+    global_drive_offset = max(-24, min(24, raw_g_drive)); 
+) : ( 
+    global_drive_offset = 0; 
+);
 
-// Calculate effective drive (Master doesn't double-apply, others add offset)
+// Calculate effective drive
 eff_drive = (t_topo == 2) ? t_drive : (t_drive + global_drive_offset);
 
-// Always update targets based on new effective drive
-target_calib = 10^((eff_drive + topo_offset) / 20);
-target_out = 10^((t_out_gain - eff_drive - topo_offset) / 20);
+// Always update targets based on new effective drive using Safe Pow
+target_calib = pow(10, (eff_drive + topo_offset) / 20);
+target_out = pow(10, (t_out_gain - eff_drive - topo_offset) / 20);
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
 topology_interstage = t_topo == 0 ? 1.0 : 0.85; topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
 
-// --- NEW FADE-IN FIX LOGIC (Inserted safely after target calculation) ---
+// --- NEW FADE-IN FIX LOGIC ---
 current_play_state = play_state;
 (current_play_state != last_play_state && s_init_done == 1) ? (
-  // Sync all smoothed values immediately on playback state change
-  // BUT skip if we're still initializing
   s_flux = target_flux;
   s_thermal = target_thermal;
   s_analog = target_analog;
   s_calib = target_calib;
   s_out = target_out;
-  s_bypass = target_bypass; // Critical for bypass fade fix
+  s_bypass = target_bypass; 
 
   last_play_state = current_play_state;
 );
-// ------------------------------------------------------------------------
 
 t_bypass == 0 ? ( atomic_add(gmem[10], energy_accum * 0.000015); );
 energy_accum = 0; t_topo == 2 ? ( gmem[10] *= pow(0.998, samplesblock); ); rail_target = gmem[10];
 
 // --- MASTER CLEAR LOGIC MOVED TO @BLOCK FOR SAFETY ---
-// This ensures memory is cleared BEFORE samples start, preventing infinite rise
 t_topo == 2 ? ( 
   // Swap Banks
   current_read = gmem[PTR_BANK]; 
   next_read = 1 - current_read; 
   gmem[PTR_BANK] = next_read;
   
-  // Clear the NEW write buffer (which was the old read buffer)
-  // We use the same Stride/Offset logic to ensure we hit exactly the slots used by channels
-  // Clearing 10 clusters (or more if expanded)
-  clr_base = BANK_A_OFFSET + (current_read * BANK_STRIDE); // The buffer we are about to write to
+  // Clear the NEW write buffer
+  clr_base = BANK_A_OFFSET + (current_read * BANK_STRIDE); 
   xi = 0; 
-  loop(18, // Safety margin: Clear a bit more than 10 to be safe
+  loop(18, 
       gmem[clr_base + (xi * CLUSTER_STRIDE)] = 0; 
       xi += 1; 
   );
 );
 
 safe_bank_ptr = gmem[PTR_BANK];
+// SANITIZE BANK POINTER (Prevent reading garbage memory)
+(safe_bank_ptr < 0 || safe_bank_ptr > 1) ? safe_bank_ptr = 0;
 
 @sample
 rawL = spl0; rawR = spl1;
@@ -793,8 +781,6 @@ meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_i
     xt_cnt += 1;
     
     // DECISION: Batch or Real-Time?
-    // t_xt_res == 0 (Lite) -> Batch 16
-    // t_xt_res == 1 (Heavy) -> Batch 1
     batch_target = (t_xt_res == 1) ? 1 : 16;
 
     // Hit global memory logic
