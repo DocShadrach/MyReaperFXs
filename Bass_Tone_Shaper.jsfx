@@ -1,0 +1,449 @@
+desc: Bass Tone Shaper (DocShadrach)
+// Author: Doc Shadrach
+// Version: 1.0
+
+// --- 1. TONE SHAPING ---
+slider1:50<0,100,0.1>Drive (High Band) [%]
+slider2:0.35<0,1,0.001>Character (SVT Scoop -> Flat -> Modern)
+slider3:0<-12,12,0.1>Low (125 Hz) [dB]
+slider4:0<-12,12,0.1>Mid (500 Hz) [dB]
+slider5:0<-12,12,0.1>High (3.2 kHz) [dB]
+
+// --- 2. BLENDING ---
+slider6:100<0,100,0.1>Blend (Dry/Wet) [%]
+
+// --- 3. DYNAMICS & EFFECTS ---
+slider7:0<0,100,0.1>Smart Comp (Opto RMS)
+slider8:0<0,100,0.1>3D Air (Post-Comp Shimmer)
+
+// --- 4. MASTER ---
+slider9:0<-12,12,0.1>Output Gain [dB]
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+  pi = 3.14159265359;
+  last_srate = -1;
+  
+  // --- DENORMAL PROTECTION CONSTANT ---
+  denorm = pow(10, -30);
+
+  // --- MATH HELPERS ---
+  // [MODIFICACION SENIOR]: Agregado clamp de seguridad para evitar NaN (Infinity) en ganancias extremas.
+  function tanh(x) ( x = max(-10, min(10, x)); (exp(2*x) - 1) / (exp(2*x) + 1) );
+  function db2amp(db) ( pow(10, db/20) );
+  function amp2db(amp) ( 20 * log10(max(amp, 0.000001)) );
+
+  // --- SMOOTHING ---
+  rc_smooth = exp(-1.0 / (0.02 * srate)); 
+  sm_drive = 0; sm_out_db = 0; sm_char = 0; sm_comp = 0;
+
+  // --- FILTERS ---
+  function lp_set(fc, sr) instance(coeff) ( coeff = 1.0 - exp(-2.0 * 3.14159265 * fc / sr); );
+  function lp_tick(in) instance(last, coeff) ( last += (in - last) * coeff; );
+  
+  // 1-Pole Crossover for Compressor (Phase gentle)
+  function xo_set(fc, sr) instance(coeff) ( coeff = 1.0 - exp(-2.0 * 3.14159265 * fc / sr); );
+  function xo_tick(in) instance(low, coeff) ( low += (in - low) * coeff; low; );
+
+  // Bandpass Filter (For 3D Air Focus)
+  function init_bp(freq, q, sample_rate)
+  instance(a0, a1, a2, b0, b1, b2)
+  local(w0, alpha, cosw)
+  (
+    w0 = 2 * pi * freq / sample_rate;
+    alpha = sin(w0) / (2 * q);
+    cosw = cos(w0);
+    b0 = alpha; b1 = 0; b2 = -alpha;
+    a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+    b0/=a0; b1/=a0; b2/=a0; a1/=a0; a2/=a0;
+  );
+
+  function bp_tick(xn)
+  instance(xn1, xn2, yn1, yn2, b0, b1, b2, a1, a2)
+  local(yn)
+  (
+    yn = b0*xn + b1*xn1 + b2*xn2 - a1*yn1 - a2*yn2;
+    xn2 = xn1; xn1 = xn;
+    yn2 = yn1; yn1 = yn;
+    yn;
+  );
+
+  // Fixed filters setup
+  opamp_bw_L.lp_set(14000, srate*2); opamp_bw_R.lp_set(14000, srate*2);
+  aa_filter_L.lp_set(16000, srate*2); aa_filter_R.lp_set(16000, srate*2);
+  
+  // Compressor Crossover Init (200Hz - Divide Body/Articulation)
+  cmp_xo_L.xo_set(200, srate);
+  cmp_xo_R.xo_set(200, srate);
+
+  // --- COEFFICIENT CALCULATIONS ---
+
+  // 1. CROSSOVER at 240Hz
+  function calc_crossover() (
+    f_x = 240; 
+    w0_x = 2 * pi * f_x / srate;
+    cos_x = cos(w0_x); alpha_x = sin(w0_x) / (2 * 0.707);
+    
+    x_a0_inv = 1.0 / (1 + alpha_x);
+    lp_a1 = (-2 * cos_x) * x_a0_inv; lp_a2 = (1 - alpha_x) * x_a0_inv;
+    lp_b0 = ((1 - cos_x) / 2) * x_a0_inv; lp_b1 = (1 - cos_x) * x_a0_inv; lp_b2 = ((1 - cos_x) / 2) * x_a0_inv;
+
+    hp_b0 = ((1 + cos_x) / 2) * x_a0_inv; hp_b1 = -(1 + cos_x) * x_a0_inv; hp_b2 = ((1 + cos_x) / 2) * x_a0_inv;
+  );
+
+  // 2. CHARACTER & EQ
+  function calc_eq_coeffs() (
+    // LOW Shelf 125Hz
+    w0 = 2*pi*125/srate; A=pow(10, slider3/40); alpha=sin(w0)/2*sqrt((A+1/A)*(1/0.707-1)+2);
+    l_a0=(A+1)+(A-1)*cos(w0)+2*sqrt(A)*alpha; inv_l=1.0/l_a0;
+    l_b0=(A*((A+1)-(A-1)*cos(w0)+2*sqrt(A)*alpha))*inv_l; l_b1=(2*A*((A-1)-(A+1)*cos(w0)))*inv_l;
+    l_b2=(A*((A+1)-(A-1)*cos(w0)-2*sqrt(A)*alpha))*inv_l; l_a1=(-2*((A-1)+(A+1)*cos(w0)))*inv_l;
+    l_a2=((A+1)+(A-1)*cos(w0)-2*sqrt(A)*alpha)*inv_l;
+
+    // MID Peaking 500Hz
+    w0 = 2*pi*500/srate; A=pow(10, slider4/40); alpha=sin(w0)/(2*0.707);
+    m_a0=1+alpha/A; inv_m=1.0/m_a0;
+    m_b0=(1+alpha*A)*inv_m; m_b1=(-2*cos(w0))*inv_m; m_b2=(1-alpha*A)*inv_m;
+    m_a1=(-2*cos(w0))*inv_m; m_a2=(1-alpha/A)*inv_m;
+
+    // HIGH Shelf 3.2kHz
+    w0 = 2*pi*3200/srate; A=pow(10, slider5/40); alpha=sin(w0)/2*sqrt((A+1/A)*(1/0.707-1)+2);
+    h_a0=(A+1)-(A-1)*cos(w0)+2*sqrt(A)*alpha; inv_h=1.0/h_a0;
+    h_b0=(A*((A+1)+(A-1)*cos(w0)+2*sqrt(A)*alpha))*inv_h; h_b1=(-2*A*((A-1)+(A+1)*cos(w0)))*inv_h;
+    h_b2=(A*((A+1)+(A-1)*cos(w0)-2*sqrt(A)*alpha))*inv_h; h_a1=(2*((A-1)-(A+1)*cos(w0)))*inv_h;
+    h_a2=((A+1)-(A-1)*cos(w0)-2*sqrt(A)*alpha)*inv_h;
+  );
+  
+  // 3. CAB SIM
+  function calc_cab_coeffs() (
+    w0_c = 2 * pi * 3500 / srate; cos_w0 = cos(w0_c); alpha_c = sin(w0_c) / (2 * 1.0);
+    cab_a0_inv = 1.0 / (1 + alpha_c);
+    cab_a1 = (-2 * cos_w0) * cab_a0_inv; cab_a2 = (1 - alpha_c) * cab_a0_inv;
+    cab_b0 = ((1 - cos_w0) / 2) * cab_a0_inv; cab_b1 = (1 - cos_w0) * cab_a0_inv; cab_b2 = ((1 - cos_w0) / 2) * cab_a0_inv;
+    
+    w0_h = 2 * pi * 50 / srate; cos_h = cos(w0_h); alpha_h = sin(w0_h) / (2 * 0.707);
+    hp_a0_inv = 1.0 / (1 + alpha_h);
+    hp_a1 = (-2 * cos_h) * hp_a0_inv; hp_a2 = (1 - alpha_h) * hp_a0_inv;
+    hp_b0 = ((1 + cos_h) / 2) * hp_a0_inv; hp_b1 = -(1 + cos_h) * hp_a0_inv; hp_b2 = ((1 + cos_h) / 2) * hp_a0_inv;
+  );
+
+  calc_crossover();
+  calc_eq_coeffs();
+  calc_cab_coeffs();
+
+  // Reset states
+  cx1_L=cx2_L=cy1_L=cy2_L=0; cx1_R=cx2_R=cy1_R=cy2_R=0;
+  lx1_L=lx2_L=ly1_L=ly2_L=0; lx1_R=lx2_R=ly1_R=ly2_R=0;
+  mx1_L=mx2_L=my1_L=my2_L=0; mx1_R=mx2_R=my1_R=my2_R=0;
+  hx1_L=hx2_L=hy1_L=hy2_L=0; hx1_R=hx2_R=hy1_R=hy2_R=0;
+  cab1_x1_L=cab1_x2_L=cab1_y1_L=cab1_y2_L=0; cab1_x1_R=cab1_x2_R=cab1_y1_R=cab1_y2_R=0;
+  cab2_x1_L=cab2_x2_L=cab2_y1_L=cab2_y2_L=0; cab2_x1_R=cab2_x2_R=cab2_y1_R=cab2_y2_R=0;
+  xo_lx1=xo_lx2=xo_ly1=xo_ly2=0; xo_rx1=xo_rx2=xo_ry1=xo_ry2=0; 
+  xo_hx1=xo_hx2=xo_hy1=xo_hy2=0; xo_hrx1=xo_hrx2=xo_hry1=xo_hry2=0; 
+  dc_lx1=dc_ly1=dc_rx1=dc_ry1=0; last_spl0=0; last_spl1=0;
+
+  // --- 3D AIR INIT ---
+  oz_base = 2000000; 
+  oz_bufsize = srate|0; 
+  oz_bufloc0 = oz_base;
+  oz_bufloc1 = oz_base + oz_bufsize + 1000;
+  oz_voiceptr0 = oz_bufloc1 + oz_bufsize + 1000;
+  oz_voicerate = oz_voiceptr0 + 1000;
+  oz_cospan = oz_voicerate + 1000;
+  oz_sinpan = oz_cospan + 1000;
+  
+  oz_buffer0 = oz_bufloc0;
+  oz_bufdiff = oz_bufloc1 - oz_bufloc0;
+  
+  oz_numvoices = 4;
+  i = 1; loop(oz_numvoices, oz_voiceptr0[i] = oz_bufloc0; i+=1; );
+  
+  // Air Focus Filters (Bandpass)
+  bp_L.init_bp(1000, 1.0, srate); 
+  bp_R.init_bp(1000, 1.0, srate);
+  
+  // --- COMPRESSOR INIT (RMS OPTICAL) ---
+  // RMS Window Coeffs
+  rms_window_lo = 1.0 - exp(-2.0 * pi * 20 / srate); // 20ms Window for Lows
+  rms_window_hi = 1.0 - exp(-2.0 * pi * 100 / srate); // Faster window for Highs
+  
+  // Attack/Release times (Gain Reduction Speed)
+  cmp_att_lo = exp(-1.0 / (0.005 * srate)); 
+  cmp_rel_lo = exp(-1.0 / (0.250 * srate)); 
+  
+  cmp_att_hi = exp(-1.0 / (0.010 * srate)); 
+  cmp_rel_hi = exp(-1.0 / (0.150 * srate)); 
+  
+  // States
+  rms_sq_lo_L = 0; rms_sq_hi_L = 0;
+  rms_sq_lo_R = 0; rms_sq_hi_R = 0;
+  gr_state_lo_L = 0; gr_state_hi_L = 0;
+  gr_state_lo_R = 0; gr_state_hi_R = 0;
+
+@block
+  srate != last_srate ? (
+    rc_smooth = exp(-1.0 / (0.02 * srate));
+    opamp_bw_L.lp_set(14000, srate*2); opamp_bw_R.lp_set(14000, srate*2);
+    aa_filter_L.lp_set(16000, srate*2); aa_filter_R.lp_set(16000, srate*2);
+    bp_L.init_bp(1000, 1.0, srate); bp_R.init_bp(1000, 1.0, srate);
+    cmp_xo_L.xo_set(200, srate); cmp_xo_R.xo_set(200, srate);
+    
+    // Recalc RMS & Dynamics
+    rms_window_lo = 1.0 - exp(-2.0 * pi * 20 / srate);
+    rms_window_hi = 1.0 - exp(-2.0 * pi * 100 / srate);
+    cmp_att_lo = exp(-1.0 / (0.005 * srate));
+    cmp_rel_lo = exp(-1.0 / (0.250 * srate));
+    cmp_att_hi = exp(-1.0 / (0.010 * srate));
+    cmp_rel_hi = exp(-1.0 / (0.150 * srate));
+    
+    calc_crossover();
+    calc_cab_coeffs();
+    oz_bufsize = srate|0;
+    last_srate = srate;
+  );
+  
+  (slider3 != last_s3 || slider4 != last_s4 || slider5 != last_s5) ? (
+    calc_eq_coeffs();
+    last_s3=slider3; last_s4=slider4; last_s5=slider5;
+  );
+  
+  // --- 3D AIR PARAM UPDATE ---
+  air_amt = slider8;
+  air_pct = air_amt / 100;
+  
+  oz_delaytime = ( (20 + (air_pct * 40)) * 0.001 * srate ) | 0; 
+  oz_pitchspread = 5 + (air_pct * 15);
+  oz_wetmix = air_pct * 0.7; 
+  
+  oz_totalpitch = oz_pitchspread * oz_numvoices;
+  oz_bufsize_curr = oz_delaytime|0;
+  oz_xfade = (oz_bufsize_curr * 0.05)|0;
+  
+  oz_panwidth = 1.0; 
+  oz_lpan = 0.5 - (oz_panwidth/2);
+  oz_panincr = oz_panwidth / max(1, oz_numvoices-1);
+
+  i = 1;
+  loop(oz_numvoices,
+    oz_voicerate[i] = pow(2, (-((oz_totalpitch / 2) - (oz_pitchspread * i)) / 1200));
+    oz_cospan[i] = cos((oz_lpan + (i - 1) * oz_panincr) * pi / 2);
+    oz_sinpan[i] = sin((oz_lpan + (i - 1) * oz_panincr) * pi / 2);
+    i += 1;
+  );
+
+@sample
+  // --- 1. CAPTURE PURE DRY SIGNAL (Before Denorm) ---
+  dry_L = spl0;
+  dry_R = spl1;
+
+  // --- 2. DENORMAL PROTECTION (For DSP Path only) ---
+  spl0 += denorm; 
+  spl1 += denorm;
+  
+  // Mix Amount
+  mix = slider6 * 0.01;
+  
+  // --- MAIN PROCESSING BLOCK ---
+  mix > 0.0 ? (
+
+      // --- PARAM SMOOTHING ---
+      sm_drive  = (sm_drive * rc_smooth) + ((slider1 * 0.01) * (1.0 - rc_smooth));
+      sm_out_db = (sm_out_db * rc_smooth) + (slider9 * (1.0 - rc_smooth));
+      sm_char   = (sm_char  * rc_smooth) + (slider2 * (1.0 - rc_smooth));
+      sm_comp   = (sm_comp  * rc_smooth) + (slider7 * (1.0 - rc_smooth));
+    
+      // --- GAIN STAGING ---
+      drive_db = sm_drive * 40.0;
+      input_gain = pow(10, drive_db / 20);
+      dist_attenuation = pow(10, -(drive_db * 0.75) / 20); 
+      
+      // OPTIMIZED OUTPUT GAIN
+      final_gain = (abs(sm_out_db) < 0.001) ? 1.0 : pow(10, sm_out_db / 20);
+    
+      // --- CHARACTER FILTER ---
+      os_rate = srate * 2;
+      c_freq = 400 + (pow(sm_char, 1.5) * 2400); 
+      c_gain = (sm_char < 0.45) ? -20 * (1 - (sm_char / 0.45)) : (sm_char - 0.45) * 30;
+      c_q = (c_gain < 0) ? 0.6 : 1.1;
+      w0 = 2 * pi * c_freq / os_rate; alpha = sin(w0) / (2 * c_q); A = pow(10, c_gain / 40);
+      c_a0_inv = 1.0 / (1 + alpha / A);
+      c_a1 = -2 * cos(w0) * c_a0_inv; c_a2 = (1 - alpha / A) * c_a0_inv;
+      c_b0 = (1 + alpha * A) * c_a0_inv; c_b1 = -2 * cos(w0) * c_a0_inv; c_b2 = (1 - alpha * A) * c_a0_inv;
+    
+      // --- 1. CROSSOVER SPLIT (240Hz) ---
+      // Clean Lows
+      low_L = lp_b0*spl0 + lp_b1*xo_lx1 + lp_b2*xo_lx2 - lp_a1*xo_ly1 - lp_a2*xo_ly2;
+      xo_lx2=xo_lx1; xo_lx1=spl0; xo_ly2=xo_ly1; xo_ly1=low_L;
+      low_R = lp_b0*spl1 + lp_b1*xo_rx1 + lp_b2*xo_rx2 - lp_a1*xo_ry1 - lp_a2*xo_ry2;
+      xo_rx2=xo_rx1; xo_rx1=spl1; xo_ry2=xo_ry1; xo_ry1=low_R;
+    
+      // Dirty Highs Input
+      hi_in_L = hp_b0*spl0 + hp_b1*xo_hx1 + hp_b2*xo_hx2 - lp_a1*xo_hy1 - lp_a2*xo_hy2;
+      xo_hx2=xo_hx1; xo_hx1=spl0; xo_hy2=xo_hy1; xo_hy1=hi_in_L;
+      hi_in_R = hp_b0*spl1 + hp_b1*xo_hrx1 + hp_b2*xo_hrx2 - lp_a1*xo_hry1 - lp_a2*xo_hry2;
+      xo_hrx2=xo_hrx1; xo_hrx1=spl1; xo_hry2=xo_hry1; xo_hry1=hi_in_R;
+    
+      // --- 2. OVERSAMPLING LOOP (Distortion) ---
+      os_step = 0;
+      loop(2,
+        os_step == 0 ? ( s0 = (hi_in_L+last_spl0)*0.5; s1 = (hi_in_R+last_spl1)*0.5; ) : ( s0=hi_in_L; s1=hi_in_R; );
+    
+        // Character Tone
+        temp = s0; s0 = c_b0 * s0 + c_b1 * cx1_L + c_b2 * cx2_L - c_a1 * cy1_L - c_a2 * cy2_L;
+        cx2_L = cx1_L; cx1_L = temp; cy2_L = cy1_L; cy1_L = s0;
+        temp = s1; s1 = c_b0 * s1 + c_b1 * cx1_R + c_b2 * cx2_R - c_a1 * cy1_R - c_a2 * cy2_R;
+        cx2_R = cx1_R; cx1_R = temp; cy2_R = cy1_R; cy1_R = s1;
+    
+        // Drive Gain + Bandwidth Limit
+        s0 *= input_gain; s0 = opamp_bw_L.lp_tick(s0);
+        s1 *= input_gain; s1 = opamp_bw_R.lp_tick(s1);
+    
+        // Asymmetric Saturation
+        sat_thresh = 1.9;
+        s0 = (s0 > 0) ? sat_thresh * tanh(s0 / sat_thresh) : sat_thresh * tanh(s0 / (sat_thresh * 0.8)) * 0.9;
+        s1 = (s1 > 0) ? sat_thresh * tanh(s1 / sat_thresh) : sat_thresh * tanh(s1 / (sat_thresh * 0.8)) * 0.9;
+    
+        s0 = aa_filter_L.lp_tick(s0);
+        s1 = aa_filter_R.lp_tick(s1);
+        os_step += 1;
+      );
+      last_spl0 = hi_in_L; last_spl1 = hi_in_R;
+      
+      // --- MERGE ---
+      s0 = (low_L * 1.41) + (s0 * dist_attenuation);
+      s1 = (low_R * 1.41) + (s1 * dist_attenuation);
+    
+      // --- CAB SIM ---
+      // LEFT CHANNEL
+      temp=s0; s0=cab_b0*s0+cab_b1*cab1_x1_L+cab_b2*cab1_x2_L-cab_a1*cab1_y1_L-cab_a2*cab1_y2_L; cab1_x2_L=cab1_x1_L; cab1_x1_L=temp; cab1_y2_L=cab1_y1_L; cab1_y1_L=s0;
+      temp=s0; s0=hp_b0*s0+hp_b1*cab2_x1_L+hp_b2*cab2_x2_L-hp_a1*cab2_y1_L-hp_a2*cab2_y2_L; cab2_x2_L=cab2_x1_L; cab2_x1_L=temp; cab2_y2_L=cab2_y1_L; cab2_y1_L=s0;
+      
+      // RIGHT CHANNEL
+      temp=s1; s1=cab_b0*s1+cab_b1*cab1_x1_R+cab_b2*cab1_x2_R-cab_a1*cab1_y1_R-cab_a2*cab1_y2_R; cab1_x2_R=cab1_x1_R; cab1_x1_R=temp; cab1_y2_R=cab1_y1_R; cab1_y1_R=s1;
+      temp=s1; s1=hp_b0*s1+hp_b1*cab2_x1_R+hp_b2*cab2_x2_R-hp_a1*cab2_y1_R-hp_a2*cab2_y2_R; cab2_x2_R=cab2_x1_R; cab2_x1_R=temp; cab2_y2_R=cab2_y1_R; cab2_y1_R=s1;
+    
+      // --- EQ ---
+      temp=s0; s0=l_b0*s0+l_b1*lx1_L+l_b2*lx2_L-l_a1*ly1_L-l_a2*ly2_L; lx2_L=lx1_L; lx1_L=temp; ly2_L=ly1_L; ly1_L=s0;
+      temp=s1; s1=l_b0*s1+l_b1*lx1_R+l_b2*lx2_R-l_a1*ly1_R-l_a2*ly2_R; lx2_R=lx1_R; lx1_R=temp; ly2_R=ly1_R; ly1_R=s1;
+      temp=s0; s0=m_b0*s0+m_b1*mx1_L+m_b2*mx2_L-m_a1*my1_L-m_a2*my2_L; mx2_L=mx1_L; mx1_L=temp; my2_L=my1_L; my1_L=s0;
+      temp=s1; s1=m_b0*s1+m_b1*mx1_R+m_b2*mx2_R-m_a1*my1_R-m_a2*my2_R; mx2_R=mx1_R; mx1_R=temp; my2_R=my1_R; my1_R=s1;
+      temp=s0; s0=h_b0*s0+h_b1*hx1_L+h_b2*hx2_L-h_a1*hy1_L-h_a2*hy2_L; hx2_L=hx1_L; hx1_L=temp; hy2_L=hy1_L; hy1_L=s0;
+      temp=s1; s1=h_b0*s1+h_b1*hx1_R+h_b2*hx2_R-h_a1*hy1_R-h_a2*hy2_R; hx2_R=hx1_R; hx1_R=temp; hy2_R=hy1_R; hy1_R=s1;
+    
+      // --- DC CLEANUP ---
+      s0_clean = s0 - dc_lx1 + 0.999 * dc_ly1; dc_lx1 = s0; dc_ly1 = s0_clean;
+      s1_clean = s1 - dc_rx1 + 0.999 * dc_ry1; dc_rx1 = s1; dc_ry1 = s1_clean;
+    
+      // --- BLENDING ---
+      spl0 = (dry_L * (1.0 - mix) + s0_clean * mix);
+      spl1 = (dry_R * (1.0 - mix) + s1_clean * mix);
+
+  ) : (
+      // DRY BYPASS
+      spl0 = dry_L;
+      spl1 = dry_R;
+      
+      sm_out_db = (sm_out_db * rc_smooth) + (slider9 * (1.0 - rc_smooth));
+      sm_comp   = (sm_comp  * rc_smooth) + (slider7 * (1.0 - rc_smooth));
+      final_gain = (abs(sm_out_db) < 0.001) ? 1.0 : pow(10, sm_out_db / 20);
+  );
+
+  // --- SMART COMPRESSOR (RMS Optical) ---
+  sm_comp > 1.0 ? (
+      // 1. Crossover Split (200Hz)
+      cmp_l_lo = cmp_xo_L.xo_tick(spl0); cmp_l_hi = spl0 - cmp_l_lo;
+      cmp_r_lo = cmp_xo_R.xo_tick(spl1); cmp_r_hi = spl1 - cmp_r_lo;
+      
+      // 2. RMS Detection
+      rms_sq_lo_L += (cmp_l_lo*cmp_l_lo - rms_sq_lo_L) * rms_window_lo; det_lo_L = sqrt(rms_sq_lo_L);
+      rms_sq_lo_R += (cmp_r_lo*cmp_r_lo - rms_sq_lo_R) * rms_window_lo; det_lo_R = sqrt(rms_sq_lo_R);
+      
+      rms_sq_hi_L += (cmp_l_hi*cmp_l_hi - rms_sq_hi_L) * rms_window_hi; det_hi_L = sqrt(rms_sq_hi_L);
+      rms_sq_hi_R += (cmp_r_hi*cmp_r_hi - rms_sq_hi_R) * rms_window_hi; det_hi_R = sqrt(rms_sq_hi_R);
+      
+      // Link Stereo
+      det_lo = max(det_lo_L, det_lo_R); det_hi = max(det_hi_L, det_hi_R);
+      det_lo_db = amp2db(det_lo); det_hi_db = amp2db(det_hi);
+      
+      // 3. Control Logic
+      thresh_db = -10.0 - (sm_comp * 0.3); 
+      
+      // Low Band
+      over_lo = det_lo_db - thresh_db;
+      target_gr_lo = (over_lo > 0) ? over_lo * 0.75 : 0;
+      gr_state_lo_L += (target_gr_lo - gr_state_lo_L) * (target_gr_lo > gr_state_lo_L ? cmp_att_lo : cmp_rel_lo);
+      
+      // High Band
+      over_hi = det_hi_db - thresh_db;
+      target_gr_hi = (over_hi > 0) ? over_hi * 0.50 : 0;
+      gr_state_hi_L += (target_gr_hi - gr_state_hi_L) * (target_gr_hi > gr_state_hi_L ? cmp_att_hi : cmp_rel_hi);
+      
+      // 4. Auto-Makeup Gain (Minimal Compensation: 5dB Max)
+      makeup_db = sm_comp * 0.05;
+      
+      // Apply Gain
+      gain_lin_lo = db2amp(makeup_db - gr_state_lo_L);
+      gain_lin_hi = db2amp(makeup_db - gr_state_hi_L);
+      
+      spl0 = (cmp_l_lo * gain_lin_lo) + (cmp_l_hi * gain_lin_hi);
+      spl1 = (cmp_r_lo * gain_lin_lo) + (cmp_r_hi * gain_lin_hi);
+  );
+  
+  // --- 3D AIR (High Band Focus) ---
+  air_amt > 0 ? (
+      air_in_L = bp_L.bp_tick(spl0);
+      air_in_R = bp_R.bp_tick(spl1);
+  
+      oz_wet0 = 0; oz_wet1 = 0;
+      i = 1;
+      loop(oz_numvoices,
+        v0 = oz_voiceptr0[i]; 
+        iv0 = 0|v0; frac0 = v0 - iv0;
+        iv02 = iv0 >= (oz_bufloc0 + oz_bufsize_curr - 1) ? iv0 - oz_bufsize_curr + 1 : iv0 + 1;
+        ren0 = (iv0[0] * (1-frac0) + iv02[0] * frac0);
+        ren1 = (iv0[oz_bufdiff] * (1-frac0) + iv02[oz_bufdiff] * frac0);
+        
+        vr = oz_voicerate[i];
+        vr >= 1.0 ? (
+          tv = v0; tv > oz_buffer0 ? tv -= oz_bufsize_curr;
+          (tv >= oz_buffer0 - oz_xfade && tv < oz_buffer0) ? (
+             frac = (oz_buffer0 - tv) / oz_xfade;
+             tmp = v0 + oz_xfade; tmp >= oz_bufloc0 + oz_bufsize_curr ? tmp -= oz_bufsize_curr;
+             tmp2 = tmp >= oz_bufloc0 + oz_bufsize_curr - 1 ? oz_bufloc0 : tmp + 1;
+             ren0 = ren0 * frac + (1-frac) * (tmp[0] * (1-frac0) + tmp2[0] * frac0);
+             ren1 = ren1 * frac + (1-frac) * (tmp[oz_bufdiff] * (1-frac0) + tmp2[oz_bufdiff] * frac0);
+             tv + vr > oz_buffer0 + 1 ? v0 += oz_xfade;
+          );
+        ) : (
+          tv = v0; tv < oz_buffer0 ? tv += oz_bufsize_curr;
+          (tv >= oz_buffer0 && tv < oz_buffer0 + oz_xfade) ? (
+             frac = (tv - oz_buffer0) / oz_xfade;
+             tmp = v0 + oz_xfade; tmp >= oz_bufloc0 + oz_bufsize_curr ? tmp -= oz_bufsize_curr;
+             tmp2 = tmp >= oz_bufloc0 + oz_bufsize_curr - 1 ? oz_bufloc0 : tmp + 1;
+             ren0 = ren0 * frac + (1-frac) * (tmp[0] * (1-frac0) + tmp2[0] * frac0);
+             ren1 = ren1 * frac + (1-frac) * (tmp[oz_bufdiff] * (1-frac0) + tmp2[oz_bufdiff] * frac0);
+             tv + vr < oz_buffer0 + 1 ? v0 += oz_xfade;
+          );
+        );
+        oz_wet0 += oz_cospan[i] * ren0; oz_wet1 += oz_sinpan[i] * ren1;
+        v0 += vr; v0 >= (oz_bufloc0 + oz_bufsize_curr) ? v0 -= oz_bufsize_curr;
+        oz_voiceptr0[i] = v0; i += 1;
+      );
+      
+      oz_buffer0[0] = air_in_L; oz_buffer0[oz_bufdiff] = air_in_R;
+      oz_buffer0 += 1; oz_buffer0 >= (oz_bufloc0 + oz_bufsize_curr) ? oz_buffer0 -= oz_bufsize_curr;
+      
+      spl0 += oz_wet0 * oz_wetmix; 
+      spl1 += oz_wet1 * oz_wetmix;
+  ) : (
+      oz_buffer0[0] = 0; oz_buffer0[oz_bufdiff] = 0;
+      oz_buffer0 += 1; oz_buffer0 >= (oz_bufloc0 + oz_bufsize_curr) ? oz_buffer0 -= oz_bufsize_curr;
+  );
+
+  // --- FINAL OUTPUT GAIN ---
+  spl0 *= final_gain;
+  spl1 *= final_gain;
