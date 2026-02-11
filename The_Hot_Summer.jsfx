@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 1.9
+// version: 2.0
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -98,6 +98,7 @@ h_hystL = 0; h_hystR = 0;
 // Optimization Cache
 last_active_stems = -1;
 cached_headroom = 1.0;
+s_headroom = 1.0; // [FIX] Smoothed headroom variable
 
 // Force update on first block
 last_global_bypass = -1;
@@ -146,7 +147,8 @@ fpdR = 16386 + rand(2147483647);
 // VISIBILITY LOGIC
 t_topo == 0 ? (
   // Removed reference to 4096 (old slider 13) to prevent UI ghosting
-  slider_show(16 | 32 | 64 | 256 | 1024, 0); 
+  // [MOD] Added 2048 (Slider 12) to hidden list for Stem Sender
+  slider_show(16 | 32 | 64 | 256 | 1024 | 2048, 0); 
   slider_show(4 | 8, 1);
   
   // Hide Gravity Sliders in Stem Sender
@@ -217,12 +219,25 @@ drift_mod = sin(play_position * 0.05) * 0.001 + (1.0 - gmem[20]) * 0.0025;
 t_topo == 1 ? (
   g_tick = atomic_add(gmem[100], 1);
   any_solo = 0;
+  
+  // [FIX] CALCULATE ACTIVE STEMS IN BLOCK, NOT SAMPLE
+  // This prevents the "Zipper Noise" distortion when volume thresholds are crossed.
+  active_stems = 0; 
   ki = 0; loop(8,
     // FIX v1.9: Increased tolerance from 5 to 100 to prevent dropouts during fast offline render
     active_map[ki] = (g_tick - gmem[200 + ki] < 100) ? 1 : 0;
     stem_solo[ki] ? any_solo = 1;
+    
+    // Count logical active stems for Headroom Calculation
+    is_logically_active = (active_map[ki] && !stem_mute[ki] && (any_solo == 0 || stem_solo[ki]));
+    is_logically_active ? active_stems += 1;
+    
     ki += 1;
   );
+  
+  // Calculate target headroom here (stable) instead of in audio loop
+  target_headroom = active_stems > 1 ? 1 / pow(active_stems, 0.25) : 1.0;
+  
   g_mode_force = (t_mode == 4) ? 0 : t_mode;
   gmem[15] = g_mode_force;
 ) : (
@@ -327,7 +342,7 @@ t_topo == 0 ? (
   spl0 = 0; spl1 = 0; 
   
   sumL = 0; sumR = 0; dryL = 0; dryR = 0;
-  active_stems = 0; total_demand = 0;
+  total_demand = 0;
   
   // --- GRAVITY CONTEXT SETUP ---
   g_rail = gmem[20];
@@ -348,8 +363,10 @@ t_topo == 0 ? (
     stem_vol[j] = stem_vol[j] * fade_smooth + target_v * (1.0 - fade_smooth);
     v = stem_vol[j];
     cL = spl(j*2 + 2) * v; cR = spl(j*2 + 3) * v;
-    (v > 0.001) ? (
-      active_stems += 1;
+    
+    // [FIX] REMOVED "v > 0.001" LOGIC HERE TO PREVENT ZIPPER NOISE
+    // We now just check if the stem has any significant volume to process for DSP efficiency
+    (v > 0.0000001) ? (
       dryL += cL; dryR += cR; 
       
       // Calculate Demand BEFORE compression (Correct Logic for PSU & Audit)
@@ -423,12 +440,11 @@ t_topo == 0 ? (
     rail_smooth = rail_smooth * rail_inertia_coeff + target_sag * (1.0 - rail_inertia_coeff);
     gmem[20] = rail_smooth; 
     
-    (active_stems != last_active_stems) ? (
-      cached_headroom = active_stems > 1 ? 1 / pow(active_stems, 0.25) : 1.0;
-      last_active_stems = active_stems;
-    );
-    sumL *= cached_headroom;
-    sumR *= cached_headroom;
+    // [FIX] APPLY SMOOTHED HEADROOM (Calculated in @block)
+    // This removes the zipper noise caused by instant headroom switching
+    s_headroom = s_headroom * 0.999 + target_headroom * 0.001;
+    sumL *= s_headroom;
+    sumR *= s_headroom;
 
     delta_refL = sumL; delta_refR = sumR;
     base_sumL = sumL; base_sumR = sumR;
@@ -487,7 +503,7 @@ t_topo == 0 ? (
     sumL = proc_sumL; sumR = proc_sumR;
     
     // Automatic Makeup Gain
-    makeup_gain = 1.0 / cached_headroom;
+    makeup_gain = 1.0 / s_headroom;
     sumL *= makeup_gain;
     sumR *= makeup_gain;
     
