@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 3.4.1
+// version: 3.4.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -802,7 +802,7 @@ peak = max(abs(sL), abs(sR));
 meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_input * 0.9992 + peak * 0.0008);
 
 // --- NEW CROSSTALK ENGINE (Hybrid Batch/Realtime) ---
-(t_bypass == 0 && t_xtalk) ? (
+(t_bypass == 0 && t_xtalk && has_master) ? (
     // Filter calc always runs for state continuity
     xt_mono = (sL + sR) * 0.5; 
     xt_lp = xt_lp * 0.85 + xt_mono * 0.15 + denorm; 
