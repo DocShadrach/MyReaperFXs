@@ -1,14 +1,14 @@
 desc: The SSL-Style Ch Comp (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0.2
+// version: 2.0
 // about:
-//   A faithful emulation of the classic British 4000-series console channel dynamics.
+//   A faithful analog modeling inspired by the classic British 4000-series console channel dynamics.
 //   This processor features a VCA-style compression characteristic with program-dependent
 //   attack and release behaviors. It includes a switchable Dual Mono / Stereo detection
 //   circuit, authentic non-linearities (OpAmp slew limiting, transformer magnetic hysteresis),
 //   and a mathematically perfect dry path for parallel processing.
 // 
-// This plugin uses some DSP algorithms by Chris Johnson (Airwindows).
+// This plugin uses some DSP algorithms concepts by Chris Johnson (Airwindows).
 // Specifically: Slew Clipping, Safety Saturator, and Flux Hysteresis concepts.
 // Copyright (c) 2018 Chris Johnson
 //
@@ -18,21 +18,22 @@ desc: The SSL-Style Ch Comp (DocShadrach)
 // Modification, copying, redistribution, or creating derivative works is prohibited.
 // See LICENSE file in the repository for full terms.
 
-slider1:0<-20,20,0.1>Input Trim (dB)
-slider2:0<-30,10,0.1>Threshold (dB)
-slider3:3<1,20,0.1>Ratio (x:1) [Inf=Limit]
-slider4:0<0,1,1{Auto (3-30ms),Fast (3ms)}>Attack Mode
-slider5:0.2<0.1,4,0.01>Release (s)
-slider6:0<0,20,0.1>Make-Up Gain (dB)
-slider7:100<0,100,1>Mix (%)
-slider8:0<-20,20,0.1>Output Trim (dB)
+// Hidden sliders (prefixed with -) for GUI-only operation
+slider1:0<-20,20,0.1>-Input Trim (dB)
+slider2:0<-30,10,0.1>-Threshold (dB)
+slider3:3<1,20,0.1>-Ratio (x:1) [Inf=Limit]
+slider4:0<0,1,1{Auto (3-30ms),Fast (3ms)}>-Attack Mode
+slider5:0.2<0.1,4,0.01>-Release (s)
+slider6:0<0,20,0.1>-Make-Up Gain (dB)
+slider7:100<0,100,1>-Mix (%)
+slider8:0<-20,20,0.1>-Output Trim (dB)
 
-slider9:0.5<0,1,0.01>Analog VCA Color
-slider10:1<0,1,1{Brown (02),Black (242)}>Circuit Revision
-slider11:0<0,1,1{Off,On}>Sidechain HPF
-slider12:0<0,1,1{Active,Bypassed}>Soft Bypass
-slider13:0<0,1,1{Unlinked,Linked}>I/O Link
-slider14:0<0,1,1{Dual Mono,Stereo Link}>Detector Link
+slider9:0.5<0,1,0.01>-Analog VCA Color
+slider10:1<0,1,1{Brown (02),Black (242)}>-Circuit Revision
+slider11:0<0,1,1{Off,On}>-Sidechain HPF
+slider12:0<0,1,1{Active,Bypassed}>-Soft Bypass
+slider13:0<0,1,1{Unlinked,Linked}>-I/O Link
+slider14:0<0,1,1{Dual Mono,Stereo Link}>-Detector Link
 
 in_pin:left input
 in_pin:right input
@@ -112,12 +113,12 @@ function safety_saturate(x)
 // Updates all DSP coefficients based on slider values and Sample Rate
 function update_dsp() 
 (
-    gain_in_db = slider1; in_gain_lin = 10 ^ (gain_in_db / 20);
+    gain_in_db = slider1; in_gain_lin = pow(10, gain_in_db / 20);
     thresh_db = slider2; ratio = slider3; fast_att = slider4; rel_ms = slider5 * 1000;
-    makeup_db = slider6; out_gain_lin = 10 ^ (makeup_db / 20);
+    makeup_db = slider6; out_gain_lin = pow(10, makeup_db / 20);
     mix_pct = slider7; mix_wet = mix_pct / 100; mix_dry = 1.0 - mix_wet;
     
-    target_out = 10 ^ (slider8 / 20);
+    target_out = pow(10, slider8 / 20);
     target_anom = slider9;
     
     revision = slider10; hpf_on = slider11;
@@ -208,7 +209,7 @@ function vca_saturation(x, lin_gr, drive)
 
 // DIODE KNEE
 // Soft-knee rectifier function for the detector.
-function diode_knee(x, width) ( (x > width*0.5) ? x : (x < -width*0.5) ? 0 : ((x + width*0.5)^2) / (2 * width); );
+function diode_knee(x, width) ( (x > width*0.5) ? x : (x < -width*0.5) ? 0 : (sqr(x + width*0.5)) / (2 * width); );
 
 // DBX LOG ERROR
 // Simulates logarithmic detector error at extreme dynamic ranges.
@@ -251,7 +252,7 @@ update_dsp();
     
     noise_l_state = 0; noise_r_state = 0;
     smooth_anom = slider9;
-    smooth_out = 10^(slider8/20);
+    smooth_out = pow(10, slider8/20);
     env_follow = 0; env_follow_r = 0;
     sc_lp_state = 0; sc_lp_state_r = 0;
     load_integ = 0; load_integ_r = 0;
@@ -302,18 +303,29 @@ smooth_anom > 0 ? (
 
 // === DETECTOR SIDECHAIN ===
 
-abs_l = abs(raw_l); 
-abs_r = abs(raw_r);
+// Capture SC inputs
+sc_l = raw_l; sc_r = raw_r;
+
+// User HPF (120Hz) - Filter AC Signal BEFORE Rectification
+// This fixes the gain loss issue by preserving signal energy in the AC domain
+hpf_on ? (
+    // Left Channel Filter
+    hpf_out = b0_hpf * sc_l + b1_hpf * hpf_x1 + b2_hpf * hpf_x2 - a1_hpf * hpf_y1 - a2_hpf * hpf_y2;
+    hpf_x2 = hpf_x1; hpf_x1 = sc_l + denorm; hpf_y2 = hpf_y1; hpf_y1 = hpf_out + denorm; 
+    sc_l = hpf_out;
+
+    // Right Channel Filter (Process both for correct Stereo Link max evaluation)
+    hpf_out_r = b0_hpf * sc_r + b1_hpf * hpf_x1_r + b2_hpf * hpf_x2_r - a1_hpf * hpf_y1_r - a2_hpf * hpf_y2_r;
+    hpf_x2_r = hpf_x1_r; hpf_x1_r = sc_r + denorm; hpf_y2_r = hpf_y1_r; hpf_y1_r = hpf_out_r + denorm; 
+    sc_r = hpf_out_r;
+);
+
+// Rectification (AC to DC)
+abs_l = abs(sc_l); 
+abs_r = abs(sc_r);
 
 // Determine input for the main detector path (Used for Left in Dual Mono, or Both in Linked)
 det_in_l = link_mode ? max(abs_l, abs_r) : abs_l;
-
-// User HPF (120Hz) - Main Path
-hpf_on ? (
-    hpf_out = b0_hpf * det_in_l + b1_hpf * hpf_x1 + b2_hpf * hpf_x2 - a1_hpf * hpf_y1 - a2_hpf * hpf_y2;
-    hpf_x2 = hpf_x1; hpf_x1 = det_in_l + denorm; hpf_y2 = hpf_y1; hpf_y1 = hpf_out + denorm; 
-    det_in_l = abs(hpf_out);
-);
 
 // Detector LPF (22kHz limit) - Main Path
 sc_lp_state = sc_lp_state * sc_lp_coeff + det_in_l * (1.0 - sc_lp_coeff);
@@ -357,12 +369,6 @@ link_mode ? (
     // If Unlinked: Process Right Channel independently
     det_in_r = abs_r;
     
-    hpf_on ? (
-        hpf_out_r = b0_hpf * det_in_r + b1_hpf * hpf_x1_r + b2_hpf * hpf_x2_r - a1_hpf * hpf_y1_r - a2_hpf * hpf_y2_r;
-        hpf_x2_r = hpf_x1_r; hpf_x1_r = det_in_r + denorm; hpf_y2_r = hpf_y1_r; hpf_y1_r = hpf_out_r + denorm; 
-        det_in_r = abs(hpf_out_r);
-    );
-
     sc_lp_state_r = sc_lp_state_r * sc_lp_coeff + det_in_r * (1.0 - sc_lp_coeff);
     sc_lp_state_r += denorm; 
     det_in_r = sc_lp_state_r;
@@ -654,7 +660,7 @@ mouse_click ? (
     hover_node == 100 ? (
         rel_x = mx - graph_x;
         new_db = map_x_to_db(rel_x, graph_w, -60, 12);
-        slider2 = min(10, max(-30, new_db)); 
+        slider2 = floor(min(10, max(-30, new_db)) * 10 + 0.5) / 10; 
         slider_automate(slider2);
     );
 
@@ -691,7 +697,11 @@ wheel != 0 && hover_node >= 0 ? (
     step = 0.5; 
     (mouse_cap & 4) ? step = 0.05;
     
-    hover_node == 0 || hover_node == 100 ? ( slider2 = min(10, max(-30, slider2 + w_dir * step)); slider_automate(slider2); ); 
+    hover_node == 0 || hover_node == 100 ? ( 
+        val = slider2 + w_dir * step;
+        slider2 = floor(min(10, max(-30, val)) * 10 + 0.5) / 10; 
+        slider_automate(slider2); 
+    ); 
     hover_node == 1 ? ( slider3 = min(20, max(1, slider3 + w_dir * 0.1)); slider_automate(slider3); ); 
     hover_node == 3 ? ( slider5 = min(4, max(0.1, slider5 + w_dir * 0.01)); slider_automate(slider5); ); 
     hover_node == 4 ? ( slider6 = min(20, max(0, slider6 + w_dir * step)); slider_automate(slider6); ); 
@@ -720,11 +730,16 @@ wheel != 0 && hover_node >= 0 ? (
     
     drag_node == 100 ? (
         pixel_db = 72.0 / graph_w; 
-        slider2 = min(10, max(-30, slider2 + dx * pixel_db));
+        val = slider2 + dx * pixel_db;
+        slider2 = floor(min(10, max(-30, val)) * 10 + 0.5) / 10; 
         slider_automate(slider2);
     );
 
-    drag_node == 0 ? ( slider2 = min(10, max(-30, slider2 + dy * 0.5 * sens)); slider_automate(slider2); );
+    drag_node == 0 ? ( 
+        val = slider2 + dy * 0.5 * sens;
+        slider2 = floor(min(10, max(-30, val)) * 10 + 0.5) / 10; 
+        slider_automate(slider2); 
+    );
     drag_node == 1 ? ( slider3 = min(20, max(1, slider3 + dy * 0.2 * sens)); slider_automate(slider3); );
     drag_node == 3 ? ( slider5 = min(4, max(0.1, slider5 + dy * 0.02 * sens)); slider_automate(slider5); );
     drag_node == 4 ? ( slider6 = min(20, max(0, slider6 + dy * 0.2 * sens)); slider_automate(slider6); );
