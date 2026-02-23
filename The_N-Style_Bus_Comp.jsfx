@@ -1,0 +1,484 @@
+desc: The N-Style Bus Comp (DocShadrach)
+// author: Doc Shadrach
+// version: 1.0
+// about: Faithful analog modeling inspired by 2254/33609 Diode Bridge units.
+//
+// Copyright (c) 2026 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
+
+// Hidden sliders (prefixed with -) for GUI-only operation
+slider1:0<-20,20,0.1>-Input Trim (dB)
+slider2:0<-30,10,0.1>-Threshold (dB)
+slider3:3<1.5,20,0.1>-Ratio (x:1) [Limit > 6]
+slider4:0<0,1,1{Auto (Dual Stage),Fixed}>-Release Mode
+slider5:0.4<0.1,4,0.01>-Release Time (Fixed)
+slider6:0<0,20,0.1>-Make-Up Gain (dB)
+slider7:100<0,100,1>-Mix (%)
+slider8:0<-20,20,0.1>-Output Trim (dB)
+
+slider9:0.2<0,1,0.01>-Mic Pre Color (Iron+ClassA)
+slider10:1<0,1,1{2254 (Vintage),33609 (Modern)}>-Model
+slider11:0<0,1,1{Off,On}>-Sidechain HPF
+slider12:0<0,1,1{Active,Bypassed}>-Soft Bypass
+slider13:0<0,1,1{Unlinked,Linked}>-I/O Link
+slider14:0<0,1,1{Dual Mono,Stereo Link}>-Detector Link
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+gfx_ext_retina = 1;
+log2db = 8.68588963806;
+db2log = 0.11512925464970228; 
+denorm = pow(10, -30); 
+hum_freq = 50; 
+
+// State Variables
+last_out_l=0; last_out_r=0; last_raw_l=0; last_raw_r=0;
+cv_state=0; cv_state_r=0; cv_lag_l=0; cv_lag_r=0;
+auto_rel_slow=0; auto_rel_slow_r=0; 
+dc_l_out=0; dc_r_out=0; dc_mid_l=0; dc_mid_r=0; 
+last_play_state=0; env_follow=0; env_follow_r=0;
+
+// Transformer & Filter States
+flux_in_l=0; flux_in_r=0; flux_out_l=0; flux_out_r=0;
+iron_filter_l=0; iron_filter_r=0; iron_filter_out_l=0; iron_filter_out_r=0; 
+lp_alias_l=0; lp_alias_r=0;
+hpf_x1=0; hpf_x2=0; hpf_y1=0; hpf_y2=0; hpf_x1_r=0; hpf_x2_r=0; hpf_y1_r=0; hpf_y2_r=0;
+hum_phase1=0; noise_l_state=0; noise_r_state=0;
+gr_meter_peak=0; gr_disp=0; in_meter_peak=0; in_disp=-100;
+
+// Param Smoothing Targets
+target_anom = slider9; smooth_anom = target_anom;
+target_in_gain = pow(10, slider1/20); smooth_in_gain = target_in_gain;
+target_makeup = pow(10, slider6/20); smooth_makeup = target_makeup;
+target_out = pow(10, slider8/20); smooth_out = target_out;
+
+drag_node = -1; hover_node = -1;
+
+// --- DSP KERNELS ---
+
+function calc_coeff(ms) ( exp(-1000.0 / (ms * srate)); );
+function safety_saturate(x) ( x = max(-4.0, min(4.0, x)); x / (1 + abs(x*0.1)); );
+
+function update_params() 
+(
+    target_in_gain = pow(10, slider1/20);
+    target_makeup = pow(10, slider6/20);
+    target_out = pow(10, slider8/20);
+    thresh_db = slider2; ratio = slider3; 
+    rel_mode = slider4; fixed_rel_ms = slider5 * 1000;
+    mix_pct = slider7; mix_wet = mix_pct/100; mix_dry = 1.0 - mix_wet;
+    target_anom = slider9; model_rev = slider10; 
+    hpf_on = slider11; is_bypassed = slider12; link_mode = slider14;
+    knee_width = 12.0; slope_factor = 1.0 - (1.0 / ratio); 
+);
+
+function apply_transformer_slew(x, last_x, drive) local(max_step, delta)
+(
+    max_step = (0.8 - (drive * 0.3)) * sr_comp; 
+    delta = max(-max_step, min(max_step, x - last_x));
+    last_x + delta;
+);
+
+function class_a_drive_pro(x, drive) local(bias, pos_drive, neg_drive)
+(
+    bias = 0.05 * drive; x += bias;
+    pos_drive = 0.15 * drive; neg_drive = 0.12 * drive;
+    x > 0 ? ( x = x / (1 + abs(x * pos_drive)); ) : ( x = x / (1 + abs(x * neg_drive)); );
+    x - bias; 
+);
+
+function diode_bridge_pro(x, lin_gr, drive) local(bias, intermod)
+(
+    bias = (1.0 - lin_gr); 
+    intermod = x * x * x * (bias * 0.2 * drive); 
+    (x * lin_gr) - intermod; 
+);
+
+function diode_knee(x, width) ( (x > width*0.5) ? x : (x < -width*0.5) ? 0 : (sqr(x + width*0.5)) / (2 * width); );
+
+@slider
+update_params();
+
+@block
+sr_comp = 44100 / srate;
+dc_alpha = 1.0 - exp(-2 * $pi * 5.0 / srate);
+iron_lp_coeff = exp(-2 * $pi * 60.0 / srate);
+cv_lag_coeff = exp(-1000.0 / (2.0 * srate)); 
+alias_lp_coeff = exp(-2 * $pi * 16000.0 / srate);
+
+// Smoothing: Fast for Color (5ms), Slow for Gain (30ms)
+color_smooth_coeff = exp(-1.0 / (0.005 * srate)); 
+gain_smooth_coeff = exp(-1.0 / (0.03 * srate));
+meter_decay = exp(-1.0 / (0.3 * srate));
+flux_decay = exp(-1000.0 / (50.0 * srate)); // Long memory for flux
+
+att_ms = (model_rev == 0) ? 5.0 : 3.0; 
+att_coeff = calc_coeff(att_ms);
+auto_fast_coeff = calc_coeff(150); 
+auto_slow_coeff = calc_coeff(1500);
+
+// SC Filter Coeffs
+freq = 100; wc = 2 * $pi * freq / srate; k_c = 1 / tan(wc / 2); sq_2 = 1.41421356;
+norm_b = 1 / (1 + sq_2 * k_c + k_c * k_c);
+b0_hpf = k_c * k_c * norm_b; b1_hpf = -2 * b0_hpf; b2_hpf = b0_hpf;
+a1_hpf = 2 * (1 - k_c * k_c) * norm_b; a2_hpf = (1 - sq_2 * k_c + k_c * k_c) * norm_b;
+
+(play_state != 0 && last_play_state == 0) ? (
+    cv_state=0; cv_state_r=0; cv_lag_l=0; cv_lag_r=0; auto_rel_slow=0; auto_rel_slow_r=0;
+    last_out_l=0; last_out_r=0; last_raw_l=0; last_raw_r=0;
+    flux_in_l=0; flux_in_r=0; flux_out_l=0; flux_out_r=0;
+    iron_filter_l=0; iron_filter_r=0; iron_filter_out_l=0; iron_filter_out_r=0;
+    lp_alias_l=0; lp_alias_r=0; noise_l_state=0; noise_r_state=0;
+    env_follow=0; env_follow_r=0; dc_l_out=0; dc_r_out=0; dc_mid_l=0; dc_mid_r=0;
+    smooth_anom = target_anom; smooth_in_gain = target_in_gain;
+    smooth_makeup = target_makeup; smooth_out = target_out;
+);
+last_play_state = play_state;
+
+@sample
+bypass_l = spl0; bypass_r = spl1;
+
+// Parameter Interpolation
+smooth_anom = (smooth_anom * color_smooth_coeff) + (target_anom * (1.0 - color_smooth_coeff));
+smooth_in_gain = (smooth_in_gain * gain_smooth_coeff) + (target_in_gain * (1.0 - gain_smooth_coeff));
+smooth_makeup = (smooth_makeup * gain_smooth_coeff) + (target_makeup * (1.0 - gain_smooth_coeff));
+smooth_out = (smooth_out * gain_smooth_coeff) + (target_out * (1.0 - gain_smooth_coeff));
+
+tol_l = 1.0 + (0.005 * smooth_anom); tol_r = 1.0 - (0.005 * smooth_anom); 
+xtalk_coeff = 0.0004 * smooth_anom; 
+
+// Input Gain + Denorm Injection
+raw_l = spl0 * smooth_in_gain + denorm; 
+raw_r = spl1 * smooth_in_gain + denorm;
+dry_l = raw_l; dry_r = raw_r;
+
+smooth_anom > 0 ? (
+    raw_l = safety_saturate(raw_l);
+    raw_r = safety_saturate(raw_r);
+    
+    // Slew Rate Limiting
+    raw_l = apply_transformer_slew(raw_l, last_raw_l, smooth_anom); last_raw_l = raw_l;
+    raw_r = apply_transformer_slew(raw_r, last_raw_r, smooth_anom); last_raw_r = raw_r;
+    
+    // Iron Transformer Logic (Left)
+    iron_filter_l = (iron_filter_l * iron_lp_coeff) + (raw_l * (1.0 - iron_lp_coeff));
+    flux_drive_l = smooth_anom * tol_l;
+    hyst_l = (flux_in_l + iron_filter_l * 0.5) * 0.3 * flux_drive_l; 
+    sat_l = raw_l + hyst_l;
+    abs_sat_l = abs(sat_l);
+    (abs_sat_l > 1.2) ? ( sat_l = 1.2 * (sat_l / abs_sat_l); ) : ( sat_l = sat_l / (1.0 + abs_sat_l * 0.3 * flux_drive_l); );
+    flux_in_l = flux_in_l * flux_decay + sat_l * (1.0 - flux_decay);
+    raw_l = sat_l; 
+
+    // Iron Transformer Logic (Right)
+    iron_filter_r = (iron_filter_r * iron_lp_coeff) + (raw_r * (1.0 - iron_lp_coeff));
+    flux_drive_r = smooth_anom * tol_r;
+    hyst_r = (flux_in_r + iron_filter_r * 0.5) * 0.3 * flux_drive_r; 
+    sat_r = raw_r + hyst_r;
+    abs_sat_r = abs(sat_r);
+    (abs_sat_r > 1.2) ? ( sat_r = 1.2 * (sat_r / abs_sat_r); ) : ( sat_r = sat_r / (1.0 + abs_sat_r * 0.3 * flux_drive_r); );
+    flux_in_r = flux_in_r * flux_decay + sat_r * (1.0 - flux_decay);
+    raw_r = sat_r;
+    
+    // Inter-stage DC Block (Safety for Diode Bridge)
+    dc_est_mid_l = (1.0 - dc_alpha) * dc_mid_l + dc_alpha * raw_l; dc_mid_l = dc_est_mid_l; raw_l -= dc_est_mid_l;
+    dc_est_mid_r = (1.0 - dc_alpha) * dc_mid_r + dc_alpha * raw_r; dc_mid_r = dc_est_mid_r; raw_r -= dc_est_mid_r;
+);
+
+// True Feedback Detection
+det_src_l = last_out_l; det_src_r = last_out_r;
+
+// FIX: Filter AC signal BEFORE Rectification (abs)
+hpf_on ? (
+    // Left Channel
+    hpf_out = b0_hpf*det_src_l + b1_hpf*hpf_x1 + b2_hpf*hpf_x2 - a1_hpf*hpf_y1 - a2_hpf*hpf_y2;
+    hpf_x2=hpf_x1; hpf_x1=det_src_l + denorm; hpf_y2=hpf_y1; hpf_y1=hpf_out + denorm; 
+    det_src_l = hpf_out;
+
+    // Right Channel (Always process to maintain state for Stereo Link)
+    hpf_out_r = b0_hpf*det_src_r + b1_hpf*hpf_x1_r + b2_hpf*hpf_x2_r - a1_hpf*hpf_y1_r - a2_hpf*hpf_y2_r;
+    hpf_x2_r=hpf_x1_r; hpf_x1_r=det_src_r + denorm; hpf_y2_r=hpf_y1_r; hpf_y1_r=hpf_out_r + denorm; 
+    det_src_r = hpf_out_r;
+);
+
+// Rectify
+abs_l = abs(det_src_l);
+abs_r = abs(det_src_r);
+
+det_in_l = link_mode ? max(abs_l, abs_r) : abs_l;
+
+det_db = 20 * log10(max(det_in_l, 0.000001)); 
+overshoot = det_db - thresh_db;
+target_gr = diode_knee(overshoot, knee_width) * slope_factor;
+
+(target_gr > env_follow) ? (
+    env_follow = target_gr + att_coeff * (env_follow - target_gr);
+) : (
+    rel_mode == 0 ? (
+        (env_follow > auto_rel_slow) ? ( auto_rel_slow = env_follow; rel_c = auto_fast_coeff; ) : (
+            auto_rel_slow = auto_rel_slow * auto_slow_coeff;
+            rel_c = (env_follow > auto_rel_slow) ? auto_fast_coeff : auto_slow_coeff;
+        );
+    ) : ( auto_rel_slow = 0; rel_c = exp(-1000.0 / (slider5 * 1000.0 * srate)); );
+    env_follow = target_gr + rel_c * (env_follow - target_gr);
+);
+env_follow = max(0, env_follow);
+cv_lag_l = cv_lag_l * cv_lag_coeff + env_follow * (1.0 - cv_lag_coeff); cv_state = cv_lag_l;
+
+link_mode ? (
+    cv_state_r = cv_state; auto_rel_slow_r = auto_rel_slow;
+    env_follow_r = env_follow; cv_lag_r = cv_lag_l;
+) : (
+    det_in_r = abs_r; // Already filtered if HPF was ON
+
+    det_db_r = 20 * log10(max(det_in_r, 0.000001));
+    overshoot_r = det_db_r - thresh_db;
+    target_gr_r = diode_knee(overshoot_r, knee_width) * slope_factor;
+    (target_gr_r > env_follow_r) ? (
+        env_follow_r = target_gr_r + att_coeff * (env_follow_r - target_gr_r);
+    ) : (
+        rel_mode == 0 ? (
+            (env_follow_r > auto_rel_slow_r) ? ( auto_rel_slow_r = env_follow_r; rel_c_r = auto_fast_coeff; ) : (
+                auto_rel_slow_r = auto_rel_slow_r * auto_slow_coeff;
+                rel_c_r = (env_follow_r > auto_rel_slow_r) ? auto_fast_coeff : auto_slow_coeff;
+            );
+        ) : ( auto_rel_slow_r = 0; rel_c_r = exp(-1000.0 / (slider5 * 1000.0 * srate)); );
+        env_follow_r = target_gr_r + rel_c_r * (env_follow_r - target_gr_r);
+    );
+    env_follow_r = max(0, env_follow_r);
+    cv_lag_r = cv_lag_r * cv_lag_coeff + env_follow_r * (1.0 - cv_lag_coeff); cv_state_r = cv_lag_r;
+);
+
+hum_phase1 += 2 * $pi * hum_freq / srate; (hum_phase1 > 2*$pi) ? hum_phase1 -= 2*$pi;
+hum_ripple = sin(hum_phase1) * 0.00015 * smooth_anom;
+
+lin_gr_l = exp(-cv_state * db2log); lin_gr_r = exp(-cv_state_r * db2log);
+
+smooth_anom > 0 ? (
+    lin_gr_l *= (1.0 + hum_ripple); lin_gr_r *= (1.0 - hum_ripple);
+    out_l = diode_bridge_pro(raw_l, lin_gr_l, smooth_anom);
+    out_r = diode_bridge_pro(raw_r, lin_gr_r, smooth_anom);
+    lp_alias_l = lp_alias_l * alias_lp_coeff + out_l * (1.0 - alias_lp_coeff); out_l = lp_alias_l;
+    lp_alias_r = lp_alias_r * alias_lp_coeff + out_r * (1.0 - alias_lp_coeff); out_r = lp_alias_r;
+) : ( out_l = raw_l * lin_gr_l; out_r = raw_r * lin_gr_r; );
+
+out_l *= smooth_makeup; out_r *= smooth_makeup;
+
+smooth_anom > 0 ? (
+    out_l = class_a_drive_pro(out_l, smooth_anom);
+    out_r = class_a_drive_pro(out_r, smooth_anom);
+    
+    iron_filter_out_l = (iron_filter_out_l * iron_lp_coeff) + (out_l * (1.0 - iron_lp_coeff));
+    hyst_l = (flux_out_l + iron_filter_out_l * 0.5) * 0.3 * smooth_anom; 
+    sat_l = out_l + hyst_l;
+    abs_sat_l = abs(sat_l);
+    (abs_sat_l > 1.2) ? ( sat_l = 1.2 * (sat_l / abs_sat_l); ) : ( sat_l = sat_l / (1.0 + abs_sat_l * 0.3 * smooth_anom); );
+    flux_out_l = flux_out_l * flux_decay + sat_l * (1.0 - flux_decay);
+    out_l = sat_l;
+
+    iron_filter_out_r = (iron_filter_out_r * iron_lp_coeff) + (out_r * (1.0 - iron_lp_coeff));
+    hyst_r = (flux_out_r + iron_filter_out_r * 0.5) * 0.3 * smooth_anom; 
+    sat_r = out_r + hyst_r;
+    abs_sat_r = abs(sat_r);
+    (abs_sat_r > 1.2) ? ( sat_r = 1.2 * (sat_r / abs_sat_r); ) : ( sat_r = sat_r / (1.0 + abs_sat_r * 0.3 * smooth_anom); );
+    flux_out_r = flux_out_r * flux_decay + sat_r * (1.0 - flux_decay);
+    out_r = sat_r;
+    
+    diff_xt = out_l - out_r;
+    out_l -= diff_xt * xtalk_coeff; out_r += diff_xt * xtalk_coeff;
+);
+
+dc_est_l = (1.0 - dc_alpha) * dc_l_out + dc_alpha * out_l; dc_l_out = dc_est_l; out_l = out_l - dc_est_l;
+dc_est_r = (1.0 - dc_alpha) * dc_r_out + dc_alpha * out_r; dc_r_out = dc_est_r; out_r = out_r - dc_est_r;
+
+last_out_l = out_l; last_out_r = out_r;
+mix_out_l = (out_l * mix_wet) + (dry_l * mix_dry); mix_out_r = (out_r * mix_wet) + (dry_r * mix_dry);
+spl0 = mix_out_l * smooth_out; spl1 = mix_out_r * smooth_out;
+
+(spl0 != spl0 || spl1 != spl1 || abs(spl0) > 20.0 || abs(spl1) > 20.0) ? (
+    cv_state = 0; spl0 = 0; spl1 = 0; last_out_l = 0; last_out_r = 0;
+);
+
+gr_meter_peak = max(gr_meter_peak, cv_state); gr_meter_peak *= meter_decay;
+in_meter_peak = max(in_meter_peak, max(abs(dry_l), abs(dry_r))); in_meter_peak *= meter_decay;
+in_disp = in_disp * 0.8 + in_meter_peak * 0.2; gr_disp = gr_disp * 0.8 + gr_meter_peak * 0.2;
+is_bypassed ? ( spl0 = bypass_l; spl1 = bypass_r; );
+
+@gfx 650 350
+slider10 == 0 ? ( gfx_clear = 0x303840; box_r = 0.20; box_g = 0.22; box_b = 0.25; acc_r = 0.9; acc_g = 0.35; acc_b = 0.2; ) : ( gfx_clear = 0x454D55; box_r = 0.28; box_g = 0.30; box_b = 0.35; acc_r = 0.2; acc_g = 0.7; acc_b = 0.9; );
+txt_r=0.95; txt_g=0.95; txt_b=0.95; margin=10; header_h=40; status_h=20; meter_h=100;
+controls_start_y = header_h + status_h + meter_h + margin; row_h = (gfx_h - controls_start_y - margin) / 2;
+col_w = (gfx_w - (margin*2)) / 5; col_io_w = col_w * 0.85; link_w = col_w * 0.3;
+graph_x = margin; graph_y = header_h + status_h + 10; graph_w = gfx_w - (margin*2); graph_h = meter_h - 10;
+
+function map_db_to_x(db, w, min_db, max_db) ( norm = (db - min_db) / (max_db - min_db); min(w, max(0, norm * w)); );
+function map_x_to_db(x_pixel, w, min_db, max_db) ( norm = x_pixel / w; min_db + (norm * (max_db - min_db)); );
+
+function draw_visual_meter(x, y, w, h) (
+    slider10 == 0 ? gfx_set(0.15, 0.17, 0.2, 1) : gfx_set(0.2, 0.22, 0.25, 1); gfx_rect(x, y, w, h); 
+    gfx_set(0.4, 0.4, 0.4, 1); min_db = -60; max_db = 12; range = max_db - min_db;
+    zero_pos_x = x + map_db_to_x(0, w, min_db, max_db);
+    gfx_set(0.25, 0.1, 0.1, 0.5); bar_h = h/2 - 2; ghost_w = zero_pos_x - x;
+    gfx_rect(x, y + bar_h + 4, ghost_w, bar_h);
+    gfx_set(0.5, 0.5, 0.5, 1); i = -48; loop(5, lx = x + map_db_to_x(i, w, min_db, max_db); gfx_line(lx, y, lx, y+h); gfx_setfont(2, "Arial", 10); gfx_x = lx + 2; gfx_y = y + h - 12; sprintf(#lbl, "%d", i); gfx_drawstr(#lbl); i += 12; );
+    gfx_set(0.7, 0.7, 0.7, 1); gfx_line(zero_pos_x, y, zero_pos_x, y+h); gfx_x = zero_pos_x + 2; gfx_y = y + h - 12; gfx_drawstr("0");
+    in_db_val = 20 * log10(max(in_disp, 0.000001)); in_w = map_db_to_x(in_db_val, w, min_db, max_db);
+    gfx_set(0.3, 0.7, 0.3, 0.9); gfx_rect(x, y, in_w, bar_h);
+    thresh_x = x + map_db_to_x(slider2, w, min_db, max_db); gfx_set(acc_r, acc_g, acc_b, 0.8); gfx_rect(thresh_x, y, 2, h); 
+    gfx_setfont(2); gfx_x = thresh_x + 4; gfx_y = y + 4; gfx_set(1, 1, 1, 1); sprintf(#t_lbl, "T: %.1f", slider2); gfx_drawstr(#t_lbl);
+    gr_w_scaled = (gr_disp / range) * w; gfx_set(0.9, 0.2, 0.2, 1.0); 
+    gr_disp > 0.05 ? ( final_gr_w = max(2, gr_w_scaled); gfx_rect(zero_pos_x - final_gr_w, y + bar_h + 4, final_gr_w, bar_h); );
+    gr_disp > 0.1 ? ( gfx_setfont(1, "Arial", 30, 'b'); sprintf(#gr_str, "-%.1f dB", gr_disp); gfx_measurestr(#gr_str, tw, th); gfx_x = zero_pos_x - tw - 10; gfx_y = y + bar_h + 4 + (bar_h-th)/2; gfx_set(1, 1, 1, 1); gfx_drawstr(#gr_str); );
+);
+
+function draw_digital_param(x, y, w, h, title, val_str, is_active, node_id) (
+    hover_node == node_id || drag_node == node_id ? gfx_set(box_r*1.4, box_g*1.4, box_b*1.4, 1) : gfx_set(box_r, box_g, box_b, 1);
+    gfx_rect(x, y, w, h); drag_node == node_id ? gfx_set(acc_r, acc_g, acc_b, 1) : gfx_set(0, 0, 0, 1); gfx_rect(x, y, w, h, 0); 
+    gfx_set(txt_r, txt_g, txt_b, 0.6); gfx_setfont(2, "Arial", 11, 'b'); gfx_measurestr(title, tw, th); gfx_x = x + (w-tw)/2; gfx_y = y + 8; gfx_drawstr(title);
+    is_active ? gfx_set(txt_r, txt_g, txt_b, 1) : gfx_set(txt_r*0.5, txt_g*0.5, txt_b*0.5, 1);
+    font_sz = min(28, w * 0.25); gfx_setfont(1, "Arial", font_sz, 'b'); gfx_measurestr(val_str, vw, vh); gfx_x = x + (w-vw)/2; gfx_y = y + (h/2) - (vh/2) + 6; gfx_drawstr(val_str);
+);
+
+function draw_mix_param(x, y, w, h, title, val_str, is_active, node_id) (
+    gfx_set(txt_r, txt_g, txt_b, 0.5); gfx_setfont(2, "Arial", 11, 'b'); gfx_measurestr(title, tw, th); gfx_x = x + (w-tw)/2 + 20; gfx_y = y + 8; gfx_drawstr(title);
+    is_active ? gfx_set(txt_r, txt_g, txt_b, 1) : gfx_set(0.4, 0.4, 0.4, 1);
+    gfx_setfont(1, "Arial", 40, 'b'); gfx_measurestr(val_str, vw, vh); gfx_x = x + (w-vw)/2 + 20; gfx_y = y + (h/2) - (vh/2) + 6; gfx_drawstr(val_str);
+);
+
+function draw_switch(x, y, w, h, title, state, label_on, label_off, node_id) (
+    hover_node == node_id ? gfx_set(box_r*1.4, box_g*1.4, box_b*1.4, 1) : gfx_set(box_r*1.2, box_g*1.2, box_b*1.2, 1);
+    gfx_rect(x, y, w, h); state ? gfx_set(acc_r, acc_g, acc_b, 1) : gfx_set(0.4, 0.4, 0.4, 1); gfx_rect(x, y+h-4, w, 4); 
+    gfx_set(txt_r, txt_g, txt_b, 0.8); gfx_setfont(2, "Arial", 11); gfx_measurestr(title, tw, th); gfx_x = x + (w-tw)/2; gfx_y = y + 6; gfx_drawstr(title);
+    state ? (str=label_on; gfx_set(1,1,1,1)) : (str=label_off; gfx_set(0.6,0.6,0.6,1));
+    gfx_setfont(3, "Arial", 14, 'b'); gfx_measurestr(str, sw, sh); gfx_x = x + (w-sw)/2; gfx_y = y + (h/2); gfx_drawstr(str);
+);
+
+mouse_down = mouse_cap & 1; mouse_click = mouse_down && !last_mouse_cap;
+mouse_dbl_click = mouse_click && (time_precise() - last_click_time < 0.25);
+mouse_click ? last_click_time = time_precise();
+hover_node = -1; my = mouse_y; mx = mouse_x;
+btn_w = 110; btn_h = 24; btn_x = gfx_w - btn_w - margin; btn_y = (header_h - btn_h) / 2;
+mx > 10 && mx < 250 && my > 10 && my < 40 ? hover_node = 98; 
+mx > btn_x && mx < btn_x + btn_w && my > btn_y && my < btn_y + btn_h ? hover_node = 87; 
+hover_node == -1 && mx > graph_x && mx < graph_x + graph_w && my > graph_y && my < graph_y + graph_h ? hover_node = 100;
+my > header_h && my < header_h+status_h ? ( hover_node = 7; ); 
+controls_y = controls_start_y;
+hover_node == -1 && my > controls_y ? (
+    r1_y = controls_y; r2_y = controls_y + row_h;
+    my < r1_y + row_h ? (
+        mx>margin && mx<margin+col_w ? hover_node=0; mx>margin+col_w && mx<margin+col_w*2 ? hover_node=1; 
+        mx>margin+col_w*2 && mx<margin+col_w*3 ? ( rel_y = my - r1_y; box_h = row_h - 10; rel_y < box_h / 2 ? hover_node = 8 : hover_node = 2; );
+        mx>margin+col_w*3 && mx<margin+col_w*4 ? hover_node=3; mx>margin+col_w*4 && mx<margin+col_w*5 ? hover_node=4; 
+    ) : (
+        mx > margin && mx < margin + col_io_w ? hover_node = 5; mx > margin + col_io_w && mx < margin + col_io_w + link_w ? hover_node = 97;
+        mx > margin + col_io_w + link_w && mx < margin + col_io_w*2 + link_w ? hover_node = 88; mx > margin + col_w*2 && mx < margin + col_w*4 ? hover_node=6; 
+        mx > margin + col_w*4 ? hover_node=99; 
+    );
+);
+mouse_click ? (
+    drag_node = hover_node;
+    hover_node == 100 ? ( 
+        rel_x = mx - graph_x; 
+        new_db = map_x_to_db(rel_x, graph_w, -60, 12);
+        slider2 = floor(min(10, max(-30, new_db)) * 10 + 0.5) / 10; 
+        slider_automate(slider2); 
+    );
+    hover_node == 99 ? ( slider12 = !slider12; slider_automate(slider12); update_params(); );
+    hover_node == 98 ? ( slider10 = !slider10; slider_automate(slider10); update_params(); );
+    hover_node == 87 ? ( slider14 = !slider14; slider_automate(slider14); update_params(); ); 
+    hover_node == 97 ? ( slider13 = !slider13; slider_automate(slider13); );
+    hover_node == 2 ? ( slider4 = !slider4; slider_automate(slider4); );
+    hover_node == 8 ? ( slider11 = !slider11; slider_automate(slider11); );
+    hover_node == 0 && mouse_dbl_click ? (slider2=0; slider_automate(slider2));
+    hover_node == 1 && mouse_dbl_click ? (slider3=3; slider_automate(slider3));
+    hover_node == 3 && slider4 && mouse_dbl_click ? (slider5=0.4; slider_automate(slider5));
+    hover_node == 4 && mouse_dbl_click ? (slider6=0; slider_automate(slider6));
+    hover_node == 5 && mouse_dbl_click ? ( old_val = slider1; slider1 = 0; slider_automate(slider1); slider13 ? ( slider8 = min(20, max(-20, slider8 - (slider1 - old_val))); slider_automate(slider8); ); );
+    hover_node == 88 && mouse_dbl_click ? ( old_val = slider8; slider8 = 0; slider_automate(slider8); slider13 ? ( slider1 = min(20, max(-20, slider1 - (slider8 - old_val))); slider_automate(slider1); ); );
+    hover_node == 6 && mouse_dbl_click ? (slider7=100; slider_automate(slider7));
+    hover_node == 7 && mouse_dbl_click ? (slider9=0.5; slider_automate(slider9));
+    update_params();
+);
+wheel = mouse_wheel; mouse_wheel = 0;
+wheel != 0 && hover_node >= 0 ? (
+    w_dir = wheel / 120; step = 0.5; (mouse_cap & 4) ? step = 0.05;
+    hover_node == 0 || hover_node == 100 ? (
+        val = slider2 + w_dir * step;
+        slider2 = floor(min(10, max(-30, val)) * 10 + 0.5) / 10; 
+        slider_automate(slider2); 
+    ); 
+    hover_node == 1 ? ( slider3 = min(20, max(1.5, slider3 + w_dir * 0.1)); slider_automate(slider3); ); 
+    hover_node == 3 && slider4 ? ( slider5 = min(4, max(0.1, slider5 + w_dir * 0.01)); slider_automate(slider5); ); 
+    hover_node == 4 ? ( slider6 = min(20, max(0, slider6 + w_dir * step)); slider_automate(slider6); ); 
+    hover_node == 5 ? ( old_val = slider1; slider1 = min(20, max(-20, slider1 + w_dir * step)); slider_automate(slider1); slider13 ? ( slider8 = min(20, max(-20, slider8 - (slider1 - old_val))); slider_automate(slider8); ); );
+    hover_node == 88 ? ( old_val = slider8; slider8 = min(20, max(-20, slider8 + w_dir * step)); slider_automate(slider8); slider13 ? ( slider1 = min(20, max(-20, slider1 - (slider8 - old_val))); slider_automate(slider1); ); );
+    hover_node == 6 ? ( slider7 = min(100, max(0, slider7 + w_dir * 1.0)); slider_automate(slider7); );
+    hover_node == 7 ? ( slider9 = min(1, max(0, slider9 + w_dir * 0.01)); slider_automate(slider9); );
+    update_params();
+);
+(mouse_down && drag_node >= 0) ? (
+    dy = last_mouse_y - mouse_y; dx = mouse_x - last_mouse_x; sens = (mouse_cap & 4) ? 0.05 : 0.5; 
+    drag_node == 100 ? ( 
+        pixel_db = 72.0 / graph_w;
+        val = slider2 + dx * pixel_db;
+        slider2 = floor(min(10, max(-30, val)) * 10 + 0.5) / 10; 
+        slider_automate(slider2); 
+    );
+    drag_node == 0 ? (
+        val = slider2 + dy * 0.5 * sens;
+        slider2 = floor(min(10, max(-30, val)) * 10 + 0.5) / 10; 
+        slider_automate(slider2); 
+    );
+    drag_node == 1 ? ( slider3 = min(20, max(1.5, slider3 + dy * 0.2 * sens)); slider_automate(slider3); );
+    drag_node == 3 && slider4 ? ( slider5 = min(4, max(0.1, slider5 + dy * 0.02 * sens)); slider_automate(slider5); );
+    drag_node == 4 ? ( slider6 = min(20, max(0, slider6 + dy * 0.2 * sens)); slider_automate(slider6); );
+    drag_node == 5 ? ( old_val = slider1; slider1 = min(20, max(-20, slider1 + dy * 0.5 * sens)); slider_automate(slider1); slider13 ? ( slider8 = min(20, max(-20, slider8 - (slider1 - old_val))); slider_automate(slider8); ); );
+    drag_node == 88 ? ( old_val = slider8; slider8 = min(20, max(-20, slider8 + dy * 0.5 * sens)); slider_automate(slider8); slider13 ? ( slider1 = min(20, max(-20, slider1 - (slider8 - old_val))); slider_automate(slider1); ); );
+    drag_node == 6 ? ( slider7 = min(100, max(0, slider7 + dy * 1.0 * sens)); slider_automate(slider7); );
+    drag_node == 7 ? ( slider9 = min(1, max(0, slider9 + dx * 0.005)); slider_automate(slider9); );
+    update_params();
+);
+last_mouse_cap = mouse_down; last_mouse_x = mouse_x; last_mouse_y = mouse_y;
+gfx_set(0, 0, 0, 0.2); gfx_rect(0, 0, gfx_w, header_h); gfx_set(txt_r, txt_g, txt_b, 1);
+gfx_setfont(1, "Arial", 20, 'b'); gfx_x = margin; gfx_y = 15; 
+slider10 == 0 ? gfx_drawstr("N-STYLE 2254 (VINTAGE)") : gfx_drawstr("N-STYLE 33609 (MODERN)");
+slider14 ? gfx_set(0.3, 0.4, 0.5, 1) : gfx_set(0.2, 0.2, 0.2, 1);
+slider10 == 1 ? (gfx_g *= 1.2; gfx_b *= 1.4); hover_node == 87 ? ( gfx_r *= 1.2; gfx_g *= 1.2; gfx_b *= 1.2; );
+gfx_rect(btn_x, btn_y, btn_w, btn_h); gfx_set(1, 1, 1, 1); gfx_setfont(2, "Arial", 14, 'b');
+#mode_str = slider14 ? "STEREO LINK" : "DUAL MONO";
+gfx_measurestr(#mode_str, mw, mh); gfx_x = btn_x + (btn_w - mw)/2; gfx_y = btn_y + (btn_h - mh)/2; gfx_drawstr(#mode_str);
+st_y = header_h; gfx_set(0,0,0,0.5); gfx_rect(0, st_y, gfx_w, status_h);
+bar_w = 150; bar_h = 10; bar_x = margin + 110; bar_y = st_y + 5;
+gfx_set(0.1, 0.15, 0.2, 1); gfx_rect(bar_x, bar_y, bar_w, bar_h);
+gfx_set(acc_r, acc_g, acc_b, 0.8); gfx_rect(bar_x, bar_y, bar_w * smooth_anom, bar_h);
+gfx_set(txt_r, txt_g, txt_b, 0.7); gfx_setfont(2); gfx_x = margin; gfx_y = st_y + 4; gfx_drawstr("IRON/CLASS-A");
+sprintf(#rl_str, "IRON FLUX: %.1f%%", abs(flux_in_l+flux_out_l)*25.0);
+gfx_measurestr(#rl_str, rw, rh); gfx_x = gfx_w - rw - margin; gfx_drawstr(#rl_str);
+draw_visual_meter(graph_x, graph_y, graph_w, graph_h);
+box_w = col_w - 4; box_h = row_h - 10; y = controls_start_y;
+sprintf(#s_val, "%.1f dB", slider2); draw_digital_param(margin, y, box_w, box_h, "THRESHOLD", #s_val, !slider12, 0);
+sprintf(#s_val, "%.1f : 1", slider3); draw_digital_param(margin + col_w, y, box_w, box_h, "RATIO", #s_val, !slider12, 1);
+split_x = margin + col_w*2; split_h = box_h/2 - 2;
+draw_switch(split_x, y, box_w, split_h, "SC FILTER", slider11, "HPF ON", "OFF", 8);
+draw_switch(split_x, y + split_h + 4, box_w, split_h, "RELEASE", slider4, "FIXED", "AUTO", 2);
+sprintf(#s_val, "%.2f s", slider5); draw_digital_param(margin + col_w*3, y, box_w, box_h, "TIME (FIXED)", #s_val, !slider12 && slider4, 3);
+sprintf(#s_val, "%.1f dB", slider6); draw_digital_param(margin + col_w*4, y, box_w, box_h, "MAKEUP", #s_val, !slider12, 4);
+y = controls_start_y + row_h;
+sprintf(#s_val, "%.1f dB", slider1); draw_digital_param(margin, y, col_io_w - 4, box_h, "INPUT", #s_val, !slider12, 5);
+lx = margin + col_io_w; lw = link_w; ly = y + box_h/2 - 10; lh = 20;
+slider13 ? gfx_set(acc_r, acc_g, acc_b, 1) : gfx_set(0.3, 0.3, 0.3, 1);
+gfx_rect(lx+2, ly, lw-4, lh); gfx_set(0,0,0,1); gfx_setfont(2); 
+#lnk_t = "<->"; gfx_measurestr(#lnk_t, tw, th); gfx_x=lx+(lw-tw)/2; gfx_y=ly+(lh-th)/2; gfx_drawstr(#lnk_t);
+sprintf(#s_val, "%.1f dB", slider8); draw_digital_param(margin + col_io_w + link_w, y, col_io_w - 4, box_h, "OUTPUT", #s_val, !slider12, 88);
+sprintf(#s_val, "%d %%", slider7); draw_mix_param(margin + col_w*2, y, box_w*2, box_h, "MIX", #s_val, !slider12, 6);
+pwr_x = margin + col_w*4; slider12 ? gfx_set(0.8, 0.2, 0.2, 1) : gfx_set(0.2, 0.8, 0.2, 1); 
+gfx_rect(pwr_x, y, box_w, box_h); gfx_set(0,0,0,1); gfx_setfont(1, "Arial", 24, 'b');
+#byp_str = slider12 ? "BYPASS" : "ON";
+gfx_measurestr(#byp_str, sw, sh); gfx_x = pwr_x + (box_w-sw)/2; gfx_y = y + (box_h-sh)/2; gfx_drawstr(#byp_str);
