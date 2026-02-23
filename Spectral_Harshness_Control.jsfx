@@ -1,0 +1,531 @@
+desc: Spectral Harshness Control (DocShadrach)
+// author: Doc Shadrach
+// version: 1.0
+// about: Tame the harshness without killing the vibe.
+//
+// Copyright (c) 2026 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
+
+slider1:2000<200,15000,10>Frequency Min (Hz)
+slider2:18000<1000,22000,10>Frequency Max (Hz)
+slider3:-20<-60,0,0.1>Threshold (dB)
+slider4:100<0,100,1>Amount (%)
+slider5:300<10,1000,1>Release (ms)
+slider6:0<-1,1,0.01>Tilt (Spectral Slope)
+slider7:0<-24,24,0.1>Output Gain (dB)
+slider8:0<0,1,1{Off,On}>-Delta Listen
+slider9:0<0,1,1{Off,On}>-Bypass
+slider10:2<0,3,1{1024,2048,4096,8192}>-FFT Size
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+// --- Memory Management ---
+idx_in = 0;
+buf_len = 65536; 
+
+offset_in_l  = 0;
+offset_in_r  = buf_len;
+offset_out_l = buf_len * 2;
+offset_out_r = buf_len * 3;
+offset_win   = buf_len * 4;
+offset_pink  = buf_len * 5;
+offset_fft   = buf_len * 6; 
+offset_gain_mem_l = buf_len * 7;
+offset_gain_mem_r = buf_len * 8;
+offset_vis_gain   = buf_len * 9;
+offset_vis_pink   = buf_len * 10;
+
+// Initialize Gain Memory to 1.0 (Unity Gain)
+// We init for MAX possible size (8192/2 = 4096) to be safe
+i = 0;
+loop(4096,
+    mem[offset_gain_mem_l + i] = 1.0;
+    mem[offset_gain_mem_r + i] = 1.0;
+    mem[offset_vis_gain + i] = 1.0;
+    i += 1;
+);
+
+// Function to Re-Initialize Window and Noise when FFT Size changes
+function init_window_config() (
+    // Update Global FFT variables based on slider10
+    slider10 == 0 ? fft_size = 1024 :
+    slider10 == 1 ? fft_size = 2048 :
+    slider10 == 2 ? fft_size = 4096 :
+    fft_size = 8192;
+
+    fft_size_halved = fft_size * 0.5;
+    overlap = 4;
+    hop_size = fft_size / overlap;
+    norm_factor = 1.0 / fft_size; 
+    window_correction = 2.0 / 3.0; 
+    
+    // Update PDC
+    pdc_delay = fft_size; 
+    pdc_bot_ch = 0;
+    pdc_top_ch = 2;
+
+    // Generate Window
+    i = 0;
+    loop(fft_size,
+        mem[offset_win + i] = 0.5 * (1 - cos(2 * $pi * i / fft_size));
+        i += 1;
+    );
+    
+    // Clear visualization slightly to avoid ghosts
+    i = 0;
+    loop(fft_size_halved,
+        mem[offset_vis_gain + i] = 1.0;
+        i += 1;
+    );
+);
+
+// ADDED: Centralized function to calculate DSP parameters
+// This ensures calculations are updated if Sample Rate changes or Sliders move.
+function calc_params() (
+    // 1. Frequency Limits Calculation
+    bin_hz = srate / fft_size;
+
+    // Min Freq (Start Bin)
+    start_bin = floor(slider1 / bin_hz);
+    start_bin = max(1, min(start_bin, fft_size_halved - 1));
+
+    // Max Freq (End Bin)
+    end_bin = floor(slider2 / bin_hz);
+    end_bin = max(start_bin + 1, min(end_bin, fft_size_halved));
+
+    // 2. Dynamics
+    thresh_lin = 10 ^ (slider3 / 20);
+    amount = slider4 / 100;
+    rel_coeff = exp(-1.0 / (slider5 * srate * 0.001 / hop_size)); 
+    out_gain = 10 ^ (slider7 / 20);
+
+    // 3. TRUE TILT CALCULATION
+    base_exponent = 0.5;
+    tilt_mod = slider6 * 0.2; 
+    final_exponent = base_exponent - tilt_mod;
+
+    // Re-populate the Pink Noise array
+    i = 0;
+    loop(fft_size_halved,
+        val = 0;
+        i > 0 ? (
+            val = 1.0 / pow(i, final_exponent);
+        );
+        mem[offset_pink + i] = val;
+        mem[offset_vis_pink + i] = val;
+        i += 1;
+    );
+);
+
+// Initial Run
+init_window_config();
+calc_params();
+last_srate = srate;
+
+@slider
+// --- Parameter Updates ---
+
+// Check if FFT Size changed
+target_fft_idx = slider10;
+curr_fft_size = (target_fft_idx == 0 ? 1024 : target_fft_idx == 1 ? 2048 : target_fft_idx == 2 ? 4096 : 8192);
+
+curr_fft_size != fft_size ? (
+    init_window_config();
+);
+
+// Recalculate parameters (Freq, Dynamics, Tilt)
+calc_params();
+
+@block
+// Check for Sample Rate changes to update calculations
+srate != last_srate ? (
+    last_srate = srate;
+    calc_params();
+);
+
+@sample
+
+// 1. Write to Input Buffer
+mem[offset_in_l + idx_in] = spl0;
+mem[offset_in_r + idx_in] = spl1;
+
+// 2. FFT Block Processing
+(idx_in % hop_size) == 0 ? (
+    
+    // --- Reset Visualization Buffer ---
+    i = 0;
+    loop(fft_size_halved,
+        mem[offset_vis_gain + i] = 1.0; 
+        i += 1;
+    );
+    
+    read_pos = (idx_in - fft_size + buf_len) % buf_len;
+    
+    // --- LEFT CHANNEL ---
+    i = 0;
+    loop(fft_size,
+        idx_circ = (read_pos + i) % buf_len;
+        mem[offset_fft + i*2] = mem[offset_in_l + idx_circ] * mem[offset_win + i];
+        mem[offset_fft + i*2 + 1] = 0; 
+        i += 1;
+    );
+    
+    fft(offset_fft, fft_size);
+    fft_permute(offset_fft, fft_size);
+    
+    // Spectral Processing Left
+    i = start_bin; 
+    loop_count = end_bin - start_bin;
+    
+    loop(loop_count,
+        r = i*2; c = r+1;
+        mag = sqrt(sqr(mem[offset_fft + r]) + sqr(mem[offset_fft + c]));
+        
+        target = mem[offset_pink + i] * thresh_lin * fft_size_halved;
+        
+        gain_target = 1.0;
+        (mag > target && mag > 0.0000001) ? (
+            diff = target / mag;
+            gain_target = 1.0 - (1.0 - diff) * amount;
+        );
+        
+        last_gain = mem[offset_gain_mem_l + i];
+        
+        gain_target < last_gain ? (
+            current_gain = gain_target;
+        ) : (
+            current_gain = gain_target + (last_gain - gain_target) * rel_coeff;
+        );
+        
+        mem[offset_gain_mem_l + i] = current_gain;
+        mem[offset_vis_gain + i] = current_gain;
+        
+        mem[offset_fft + r] *= current_gain;
+        mem[offset_fft + c] *= current_gain;
+        i += 1;
+    );
+    
+    fft_ipermute(offset_fft, fft_size);
+    ifft(offset_fft, fft_size);
+    
+    // Overlap-Add Left
+    i = 0;
+    loop(fft_size,
+        val_norm = mem[offset_fft + i*2] * norm_factor;
+        out_val = val_norm * mem[offset_win + i]; 
+        out_val *= window_correction; 
+        idx_circ = (read_pos + i) % buf_len;
+        mem[offset_out_l + idx_circ] += out_val;
+        i += 1;
+    );
+    
+    // --- RIGHT CHANNEL ---
+    i = 0;
+    loop(fft_size,
+        idx_circ = (read_pos + i) % buf_len;
+        mem[offset_fft + i*2] = mem[offset_in_r + idx_circ] * mem[offset_win + i];
+        mem[offset_fft + i*2 + 1] = 0;
+        i += 1;
+    );
+    
+    fft(offset_fft, fft_size);
+    fft_permute(offset_fft, fft_size);
+    
+    // Spectral Processing Right
+    i = start_bin;
+    loop_count = end_bin - start_bin;
+    
+    loop(loop_count,
+        r = i*2; c = r+1;
+        mag = sqrt(sqr(mem[offset_fft + r]) + sqr(mem[offset_fft + c]));
+        
+        target = mem[offset_pink + i] * thresh_lin * fft_size_halved;
+        
+        gain_target = 1.0;
+        (mag > target && mag > 0.0000001) ? (
+            diff = target / mag;
+            gain_target = 1.0 - (1.0 - diff) * amount;
+        );
+        
+        last_gain = mem[offset_gain_mem_r + i];
+        
+        gain_target < last_gain ? (
+            current_gain = gain_target; 
+        ) : (
+            current_gain = gain_target + (last_gain - gain_target) * rel_coeff;
+        );
+        
+        mem[offset_gain_mem_r + i] = current_gain;
+        
+        mem[offset_fft + r] *= current_gain;
+        mem[offset_fft + c] *= current_gain;
+        i += 1;
+    );
+    
+    fft_ipermute(offset_fft, fft_size);
+    ifft(offset_fft, fft_size);
+    
+    // Overlap-Add Right
+    i = 0;
+    loop(fft_size,
+        val_norm = mem[offset_fft + i*2] * norm_factor;
+        out_val = val_norm * mem[offset_win + i]; 
+        out_val *= window_correction; 
+        idx_circ = (read_pos + i) % buf_len;
+        mem[offset_out_r + idx_circ] += out_val;
+        i += 1;
+    );
+);
+
+// 3. Output
+read_idx_out = (idx_in - fft_size + buf_len) % buf_len;
+
+out_l = mem[offset_out_l + read_idx_out];
+out_r = mem[offset_out_r + read_idx_out];
+
+dry_l = mem[offset_in_l + read_idx_out];
+dry_r = mem[offset_in_r + read_idx_out];
+
+mem[offset_out_l + read_idx_out] = 0;
+mem[offset_out_r + read_idx_out] = 0;
+
+idx_in = (idx_in + 1) % buf_len;
+
+// Delta
+slider8 == 1 ? (
+    out_l = dry_l - out_l;
+    out_r = dry_r - out_r;
+);
+
+// Gain & Clip
+out_l *= out_gain;
+out_r *= out_gain;
+
+out_l = max(-1.0, min(1.0, out_l));
+out_r = max(-1.0, min(1.0, out_r));
+
+// Bypass
+slider9 == 1 ? (
+    out_l = dry_l;
+    out_r = dry_r;
+);
+
+spl0 = out_l;
+spl1 = out_r;
+
+@gfx 600 380
+
+// --- THEME ---
+gfx_clear = 0x202020; 
+box_r = 0.16; box_g = 0.16; box_b = 0.16;
+txt_r = 0.9; txt_g = 0.9; txt_b = 0.9;
+acc_r = 1.0; acc_g = 0.55; acc_b = 0.0; 
+
+margin = 10; 
+header_h = 30; 
+graph_h = 180;
+controls_start_y = header_h + graph_h + margin*2;
+row_h = 60;
+col_w = (gfx_w - (margin*2)) / 4; 
+
+// --- HELPER FUNCTIONS ---
+
+function draw_toggle_btn(x, y, w, h, title, state, node_id) (
+    hover_node == node_id ? gfx_set(box_r*1.4, box_g*1.4, box_b*1.4, 1) : gfx_set(box_r*1.2, box_g*1.2, box_b*1.2, 1);
+    gfx_rect(x, y, w, h);
+    
+    led_size = 6;
+    led_x = x + 10; led_y = y + h/2;
+    state ? gfx_set(acc_r, acc_g, acc_b, 1) : gfx_set(0.3, 0.3, 0.3, 1);
+    gfx_circle(led_x, led_y, led_size, 1);
+    
+    // CHANGED: Increased font size to 16 to match the Bypass button
+    gfx_set(txt_r, txt_g, txt_b, state ? 1 : 0.7);
+    gfx_setfont(1, "Arial", 16, 'b'); 
+    gfx_measurestr(title, tw, th);
+    gfx_x = x + (w-tw)/2 + 8; gfx_y = y + (h/2) - (th/2);
+    gfx_drawstr(title);
+);
+
+function draw_big_bypass(x, y, w, h, state, node_id) (
+    hover_node == node_id ? gfx_set(0.25, 0.25, 0.25, 1) : gfx_set(0.2, 0.2, 0.2, 1);
+    state ? gfx_set(0.6, 0.1, 0.1, 1); 
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(1,1,1,1);
+    gfx_setfont(1, "Arial", 16, 'b');
+    str = state ? "BYPASSED" : "ACTIVE";
+    gfx_measurestr(str, sw, sh);
+    gfx_x = x + (w-sw)/2; gfx_y = y + (h/2) - (sh/2);
+    gfx_drawstr(str);
+);
+
+function draw_radio_btn(x, y, w, h, title, is_selected, node_id) (
+    // Button BG
+    hover_node == node_id ? gfx_set(box_r*1.6, box_g*1.6, box_b*1.6, 1) : gfx_set(box_r, box_g, box_b, 1);
+    is_selected ? gfx_set(acc_r*0.7, acc_g*0.7, acc_b*0.7, 1);
+    gfx_rect(x, y, w, h);
+    
+    // Highlight Border
+    is_selected ? (
+        gfx_set(1, 1, 1, 0.8);
+        gfx_rect(x, y, w, 2); // Top border
+        gfx_rect(x, y+h-2, w, 2); // Bottom
+    );
+
+    // Text (Number only)
+    gfx_set(txt_r, txt_g, txt_b, is_selected ? 1 : 0.6);
+    gfx_setfont(1, "Arial", 12, 'b');
+    gfx_measurestr(title, tw, th);
+    gfx_x = x + (w-tw)/2; gfx_y = y + (h/2) - (th/2);
+    gfx_drawstr(title);
+);
+
+// --- MOUSE LOGIC ---
+mouse_down = mouse_cap & 1; 
+mouse_click = mouse_down && !last_mouse_cap;
+mouse_dbl_click = mouse_click && (time_precise() - last_click_time < 0.25);
+mouse_click ? last_click_time = time_precise();
+hover_node = -1; 
+mx = mouse_x; my = mouse_y;
+
+// Grid
+c1_x = margin;
+c2_x = margin + col_w;
+c3_x = margin + col_w*2;
+c4_x = margin + col_w*3;
+r1_y = controls_start_y;
+r2_y = r1_y + row_h + margin;
+box_w = col_w - margin;
+box_h = row_h;
+
+// Hit Testing
+my > r2_y && my < r2_y + box_h ? (
+    // FFT Selector Buttons
+    btn_w = box_w / 2;
+    
+    // 1024
+    mx > c1_x && mx < c1_x + btn_w ? hover_node = 10;
+    // 2048
+    mx > c1_x + btn_w + 2 && mx < c1_x + btn_w*2 + 2 ? hover_node = 11;
+    // 4096
+    mx > c2_x && mx < c2_x + btn_w ? hover_node = 12;
+    // 8192
+    mx > c2_x + btn_w + 2 && mx < c2_x + btn_w*2 + 2 ? hover_node = 13;
+
+    // Delta / Bypass
+    mx > c3_x && mx < c3_x + box_w ? hover_node = 8; 
+    mx > c4_x && mx < c4_x + box_w ? hover_node = 9; 
+);
+
+// Interaction
+mouse_click ? (
+    hover_node == 8 ? ( slider8 = !slider8; slider_automate(slider8); );
+    hover_node == 9 ? ( slider9 = !slider9; slider_automate(slider9); );
+    
+    // FFT Size Selection
+    hover_node == 10 ? ( slider10 = 0; slider_automate(slider10); );
+    hover_node == 11 ? ( slider10 = 1; slider_automate(slider10); );
+    hover_node == 12 ? ( slider10 = 2; slider_automate(slider10); );
+    hover_node == 13 ? ( slider10 = 3; slider_automate(slider10); );
+);
+
+last_mouse_cap = mouse_down; last_mouse_y = mouse_y;
+
+// --- DRAW HEADER ---
+gfx_set(0, 0, 0, 0.4); gfx_rect(0, 0, gfx_w, header_h);
+gfx_set(txt_r, txt_g, txt_b, 1);
+gfx_setfont(1, "Arial", 16, 'b');
+gfx_x = margin; gfx_y = 6; 
+gfx_drawstr("SPECTRAL HARSHNESS CONTROL");
+
+// --- DRAW GRAPH ---
+g_x = margin; g_y = header_h + margin; 
+g_w = gfx_w - margin*2; 
+g_h = graph_h;
+
+gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(g_x, g_y, g_w, g_h);
+
+log_min = log(20);
+log_max = log(srate * 0.5);
+scale_x = g_w / (log_max - log_min);
+
+gfx_set(0.3, 0.3, 0.3, 1);
+f_grid = 50;
+loop(9, 
+    lx = g_x + (log(f_grid) - log_min) * scale_x;
+    lx > g_x && lx < g_x + g_w ? (
+        gfx_line(lx, g_y, lx, g_y + g_h);
+        gfx_setfont(2, "Arial", 10);
+        gfx_x = lx + 2; gfx_y = g_y + g_h - 12;
+        f_grid >= 1000 ? sprintf(#lbl, "%.0fk", f_grid*0.001) : sprintf(#lbl, "%.0f", f_grid);
+        gfx_drawstr(#lbl);
+    );
+    f_grid == 50 ? f_grid = 100 : f_grid == 100 ? f_grid = 200 : f_grid == 200 ? f_grid = 500 : 
+    f_grid == 500 ? f_grid = 1000 : f_grid == 1000 ? f_grid = 2000 : f_grid == 2000 ? f_grid = 5000 : 
+    f_grid == 5000 ? f_grid = 10000 : f_grid = 20000;
+);
+
+// Colors (Tilt)
+base_r = 1.0; base_g = 0.4; base_b = 0.7; 
+white_r = 1.0; white_g = 1.0; white_b = 1.0;
+brown_r = 0.55; brown_g = 0.27; brown_b = 0.07;
+cur_r = base_r; cur_g = base_g; cur_b = base_b;
+slider6 > 0 ? (
+    t = slider6; 
+    cur_r = base_r + (white_r - base_r) * t; cur_g = base_g + (white_g - base_g) * t; cur_b = base_b + (white_b - base_b) * t;
+) : (
+    t = abs(slider6);
+    cur_r = base_r + (brown_r - base_r) * t; cur_g = base_g + (brown_g - base_g) * t; cur_b = base_b + (brown_b - base_b) * t;
+);
+
+// Draw Curve
+gfx_set(cur_r, cur_g, cur_b, 0.9);
+gi = 1; bin_w_hz = srate / fft_size;
+loop(fft_size_halved - 1,
+    freq = gi * bin_w_hz;
+    freq > 20 ? (
+        gx = g_x + (log(freq) - log_min) * scale_x;
+        gain = mem[offset_vis_gain + gi];
+        gain < 0.999 ? (
+            gy_start = g_y + 10;
+            gy_end = gy_start + (1.0 - gain) * (g_h * 2); 
+            gx = max(g_x, min(g_x + g_w, gx));
+            gfx_line(gx, gy_start, gx, gy_end);
+        );
+    );
+    gi += 1;
+);
+
+// --- DRAW INFO LABEL (Selected FFT Description) ---
+gfx_set(acc_r, acc_g, acc_b, 1);
+gfx_setfont(1, "Arial", 14, 'b');
+
+slider10 == 0 ? info_str = "1024 (Fast / Low Latency)" :
+slider10 == 1 ? info_str = "2048 (Balanced Fast)" :
+slider10 == 2 ? info_str = "4096 (Default / Precision)" :
+info_str = "8192 (High Res / Mastering)";
+
+gfx_x = c1_x; 
+gfx_y = r2_y - 20; // Position above buttons
+gfx_drawstr(info_str);
+
+// --- DRAW CONTROLS ---
+
+// FFT Size Buttons (Layout: 4 buttons in C1/C2 area)
+btn_w = box_w / 2;
+draw_radio_btn(c1_x, r2_y, btn_w, box_h, "1024", slider10 == 0, 10);
+draw_radio_btn(c1_x + btn_w + 2, r2_y, btn_w, box_h, "2048", slider10 == 1, 11);
+
+draw_radio_btn(c2_x, r2_y, btn_w, box_h, "4096", slider10 == 2, 12);
+draw_radio_btn(c2_x + btn_w + 2, r2_y, btn_w, box_h, "8192", slider10 == 3, 13);
+
+draw_toggle_btn(c3_x, r2_y, box_w, box_h, "DELTA", slider8, 8);
+draw_big_bypass(c4_x, r2_y, box_w, box_h, slider9, 9);
