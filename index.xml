@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="faf7bdb0e9e1bdc5835c774098d3ffe859cf32cc">
+<index version="1" name="DocShadrach FXs" commit="7de15a5bf033b62de22fbefbc87449752f47ce7c">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -471,6 +471,10 @@ Channel Compressor based on the dynamics and behavior of the SSL 4000 E/G Series
     <version name="1.0.2" author="Doc Shadrach" time="2026-01-13T07:00:00Z">
      <changelog><![CDATA[The input and output pins are now declared.]]></changelog>
     <source file="The_SSL-Style_Ch_Comp.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/44c57049ef043c3a06a2bdb03bcac6cf4a120d4e/The_SSL-Style_Ch_Comp.jsfx</source>
+    </version>
+    <version name="2.0.0" author="Doc Shadrach" time="2026-02-23T07:00:00Z">
+     <changelog><![CDATA[Corrections to the formulas and the sc filter. The plugin now has no sliders, only a GUI.]]></changelog>
+    <source file="The_SSL-Style_Ch_Comp.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/7de15a5bf033b62de22fbefbc87449752f47ce7c/The_SSL-Style_Ch_Comp.jsfx</source>
     </version>
     </reapack>
 
