@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="7de15a5bf033b62de22fbefbc87449752f47ce7c">
+<index version="1" name="DocShadrach FXs" commit="aef5b1cae80acb3871a4947bcf3bf162f007ec61">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -507,6 +507,22 @@ A versatile bass tone workstation featuring bi-amp saturation, SVT-style shaping
     <version name="1.0.0" author="Doc Shadrach" time="2026-02-05T07:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
     <source file="Bass_Tone_Shaper.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/5a9f8ae7d767107a0e92d76a0f533f1219162e25/Bass_Tone_Shaper.jsfx</source>
+    </version>
+    </reapack>
+
+    <reapack name="The_N-Style_Bus_Comp.jsfx" type="effect" desc="The N-Style Bus Comp (DocShadrach)">
+     <metadata>
+      <description><![CDATA[
+The N-Style Bus Comp
+======================
+Author: Doc Shadrach
+
+Bus Compressor based on the dynamics and behavior of the Neve 2254/33609 Diode Bridge units.
+        ]]></description>
+     </metadata>
+    <version name="1.0.0" author="Doc Shadrach" time="2026-02-23T09:00:00Z">
+     <changelog><![CDATA[Initial release.]]></changelog>
+    <source file="The_N-Style_Bus_Comp.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/aef5b1cae80acb3871a4947bcf3bf162f007ec61/The_N-Style_Bus_Comp.jsfx</source>
     </version>
     </reapack>
   
