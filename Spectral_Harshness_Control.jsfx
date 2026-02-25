@@ -1,6 +1,6 @@
 desc: Spectral Harshness Control (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0
+// version: 1.0.1
 // about: Tame the harshness without killing the vibe.
 //
 // Copyright (c) 2026 DocShadrach
@@ -355,15 +355,22 @@ function draw_toggle_btn(x, y, w, h, title, state, node_id) (
 );
 
 function draw_big_bypass(x, y, w, h, state, node_id) (
-    hover_node == node_id ? gfx_set(0.25, 0.25, 0.25, 1) : gfx_set(0.2, 0.2, 0.2, 1);
-    state ? gfx_set(0.6, 0.1, 0.1, 1); 
+    state ? (
+        gfx_set(0.6, 0.1, 0.1, 1);
+    ) : (
+        gfx_set(0.1, 0.6, 0.1, 1);
+    );
+
+    hover_node != node_id ? gfx_set(gfx_r*0.8, gfx_g*0.8, gfx_b*0.8, 1);
+
     gfx_rect(x, y, w, h);
-    
+
     gfx_set(1,1,1,1);
     gfx_setfont(1, "Arial", 16, 'b');
     str = state ? "BYPASSED" : "ACTIVE";
     gfx_measurestr(str, sw, sh);
-    gfx_x = x + (w-sw)/2; gfx_y = y + (h/2) - (sh/2);
+    gfx_x = x + (w-sw)/2; 
+    gfx_y = y + (h/2) - (sh/2);
     gfx_drawstr(str);
 );
 
