@@ -1,6 +1,6 @@
 desc: Spectral Harshness Control (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0.1
+// version: 1.1
 // about: Tame the harshness without killing the vibe.
 //
 // Copyright (c) 2026 DocShadrach
@@ -9,13 +9,14 @@ desc: Spectral Harshness Control (DocShadrach)
 // Modification, copying, redistribution, or creating derivative works is prohibited.
 // See LICENSE file in the repository for full terms.
 
-slider1:2000<200,15000,10>Frequency Min (Hz)
-slider2:18000<1000,22000,10>Frequency Max (Hz)
-slider3:-20<-60,0,0.1>Threshold (dB)
-slider4:100<0,100,1>Amount (%)
-slider5:300<10,1000,1>Release (ms)
-slider6:0<-1,1,0.01>Tilt (Spectral Slope)
-slider7:0<-24,24,0.1>Output Gain (dB)
+// --- Hidden Sliders (UI Managed via Custom GFX) ---
+slider1:2000<20,15000,10>-Frequency Min (Hz)
+slider2:18000<40,22000,10>-Frequency Max (Hz)
+slider3:-20<-60,0,0.1>-Threshold (dB)
+slider4:100<0,100,1>-Amount (%)
+slider5:300<10,1000,1>-Release (ms)
+slider6:0<-1,1,0.01>-Tilt (Spectral Slope)
+slider7:0<-24,24,0.1>-Output Gain (dB)
 slider8:0<0,1,1{Off,On}>-Delta Listen
 slider9:0<0,1,1{Off,On}>-Bypass
 slider10:2<0,3,1{1024,2048,4096,8192}>-FFT Size
@@ -43,7 +44,7 @@ offset_vis_gain   = buf_len * 9;
 offset_vis_pink   = buf_len * 10;
 
 // Initialize Gain Memory to 1.0 (Unity Gain)
-// We init for MAX possible size (8192/2 = 4096) to be safe
+// We initialize for the maximum possible size (8192/2 = 4096) to prevent bounds issues.
 i = 0;
 loop(4096,
     mem[offset_gain_mem_l + i] = 1.0;
@@ -52,9 +53,8 @@ loop(4096,
     i += 1;
 );
 
-// Function to Re-Initialize Window and Noise when FFT Size changes
+// Re-Initialize window and algorithmic constants when FFT Size changes
 function init_window_config() (
-    // Update Global FFT variables based on slider10
     slider10 == 0 ? fft_size = 1024 :
     slider10 == 1 ? fft_size = 2048 :
     slider10 == 2 ? fft_size = 4096 :
@@ -64,21 +64,21 @@ function init_window_config() (
     overlap = 4;
     hop_size = fft_size / overlap;
     norm_factor = 1.0 / fft_size; 
-    window_correction = 2.0 / 3.0; 
+    window_correction = 2.0 / 3.0; // Correction for 4x overlap Hann Window
     
-    // Update PDC
+    // Update Plugin Delay Compensation (PDC)
     pdc_delay = fft_size; 
     pdc_bot_ch = 0;
     pdc_top_ch = 2;
 
-    // Generate Window
+    // Generate Hann Window
     i = 0;
     loop(fft_size,
         mem[offset_win + i] = 0.5 * (1 - cos(2 * $pi * i / fft_size));
         i += 1;
     );
     
-    // Clear visualization slightly to avoid ghosts
+    // Clear visualization buffer to avoid ghost artifacts during resize
     i = 0;
     loop(fft_size_halved,
         mem[offset_vis_gain + i] = 1.0;
@@ -86,32 +86,30 @@ function init_window_config() (
     );
 );
 
-// ADDED: Centralized function to calculate DSP parameters
-// This ensures calculations are updated if Sample Rate changes or Sliders move.
+// Centralized DSP parameter calculation.
+// Ensures calculations are updated safely if Sample Rate changes or Sliders move.
 function calc_params() (
-    // 1. Frequency Limits Calculation
     bin_hz = srate / fft_size;
 
-    // Min Freq (Start Bin)
+    // Calculate boundary bins for spectral processing
     start_bin = floor(slider1 / bin_hz);
     start_bin = max(1, min(start_bin, fft_size_halved - 1));
 
-    // Max Freq (End Bin)
     end_bin = floor(slider2 / bin_hz);
     end_bin = max(start_bin + 1, min(end_bin, fft_size_halved));
 
-    // 2. Dynamics
+    // Convert logarithmic dynamic parameters to linear scale
     thresh_lin = 10 ^ (slider3 / 20);
     amount = slider4 / 100;
     rel_coeff = exp(-1.0 / (slider5 * srate * 0.001 / hop_size)); 
     out_gain = 10 ^ (slider7 / 20);
 
-    // 3. TRUE TILT CALCULATION
+    // Calculate True Tilt Profile
     base_exponent = 0.5;
     tilt_mod = slider6 * 0.2; 
     final_exponent = base_exponent - tilt_mod;
 
-    // Re-populate the Pink Noise array
+    // Populate the reference target array (Pink noise profile + Tilt)
     i = 0;
     loop(fft_size_halved,
         val = 0;
@@ -124,15 +122,13 @@ function calc_params() (
     );
 );
 
-// Initial Run
+// Initial Execution
 init_window_config();
 calc_params();
 last_srate = srate;
 
 @slider
-// --- Parameter Updates ---
-
-// Check if FFT Size changed
+// Trigger window and param reconfiguration if size updates
 target_fft_idx = slider10;
 curr_fft_size = (target_fft_idx == 0 ? 1024 : target_fft_idx == 1 ? 2048 : target_fft_idx == 2 ? 4096 : 8192);
 
@@ -140,26 +136,30 @@ curr_fft_size != fft_size ? (
     init_window_config();
 );
 
-// Recalculate parameters (Freq, Dynamics, Tilt)
 calc_params();
 
 @block
-// Check for Sample Rate changes to update calculations
+// Check for Sample Rate changes to update math dynamically
 srate != last_srate ? (
     last_srate = srate;
     calc_params();
 );
 
-@sample
+// Thread-safe update triggered from GFX interactions
+update_dsp ? (
+    calc_params();
+    update_dsp = 0;
+);
 
-// 1. Write to Input Buffer
+@sample
+// Write incoming samples to circular buffers
 mem[offset_in_l + idx_in] = spl0;
 mem[offset_in_r + idx_in] = spl1;
 
-// 2. FFT Block Processing
+// Trigger FFT Block Processing based on hop size
 (idx_in % hop_size) == 0 ? (
     
-    // --- Reset Visualization Buffer ---
+    // Clear display buffer for current frame
     i = 0;
     loop(fft_size_halved,
         mem[offset_vis_gain + i] = 1.0; 
@@ -168,7 +168,7 @@ mem[offset_in_r + idx_in] = spl1;
     
     read_pos = (idx_in - fft_size + buf_len) % buf_len;
     
-    // --- LEFT CHANNEL ---
+    // --- LEFT CHANNEL PROCESSING ---
     i = 0;
     loop(fft_size,
         idx_circ = (read_pos + i) % buf_len;
@@ -180,7 +180,7 @@ mem[offset_in_r + idx_in] = spl1;
     fft(offset_fft, fft_size);
     fft_permute(offset_fft, fft_size);
     
-    // Spectral Processing Left
+    // Apply Harshness Control Logic (Left)
     i = start_bin; 
     loop_count = end_bin - start_bin;
     
@@ -198,6 +198,7 @@ mem[offset_in_r + idx_in] = spl1;
         
         last_gain = mem[offset_gain_mem_l + i];
         
+        // Instant attack to catch transients, exponential release
         gain_target < last_gain ? (
             current_gain = gain_target;
         ) : (
@@ -205,7 +206,7 @@ mem[offset_in_r + idx_in] = spl1;
         );
         
         mem[offset_gain_mem_l + i] = current_gain;
-        mem[offset_vis_gain + i] = current_gain;
+        mem[offset_vis_gain + i] = current_gain; // Store left channel for GFX
         
         mem[offset_fft + r] *= current_gain;
         mem[offset_fft + c] *= current_gain;
@@ -226,7 +227,7 @@ mem[offset_in_r + idx_in] = spl1;
         i += 1;
     );
     
-    // --- RIGHT CHANNEL ---
+    // --- RIGHT CHANNEL PROCESSING ---
     i = 0;
     loop(fft_size,
         idx_circ = (read_pos + i) % buf_len;
@@ -238,7 +239,7 @@ mem[offset_in_r + idx_in] = spl1;
     fft(offset_fft, fft_size);
     fft_permute(offset_fft, fft_size);
     
-    // Spectral Processing Right
+    // Apply Harshness Control Logic (Right)
     i = start_bin;
     loop_count = end_bin - start_bin;
     
@@ -284,7 +285,7 @@ mem[offset_in_r + idx_in] = spl1;
     );
 );
 
-// 3. Output
+// --- Output Management ---
 read_idx_out = (idx_in - fft_size + buf_len) % buf_len;
 
 out_l = mem[offset_out_l + read_idx_out];
@@ -293,25 +294,26 @@ out_r = mem[offset_out_r + read_idx_out];
 dry_l = mem[offset_in_l + read_idx_out];
 dry_r = mem[offset_in_r + read_idx_out];
 
+// Clear Output buffer after read
 mem[offset_out_l + read_idx_out] = 0;
 mem[offset_out_r + read_idx_out] = 0;
 
 idx_in = (idx_in + 1) % buf_len;
 
-// Delta
+// Delta / Difference Monitoring
 slider8 == 1 ? (
     out_l = dry_l - out_l;
     out_r = dry_r - out_r;
 );
 
-// Gain & Clip
+// Apply Output Gain & Clip Safety
 out_l *= out_gain;
 out_r *= out_gain;
 
 out_l = max(-1.0, min(1.0, out_l));
 out_r = max(-1.0, min(1.0, out_r));
 
-// Bypass
+// Main Bypass
 slider9 == 1 ? (
     out_l = dry_l;
     out_r = dry_r;
@@ -322,7 +324,7 @@ spl1 = out_r;
 
 @gfx 600 380
 
-// --- THEME ---
+// --- THEME & STYLING ---
 gfx_clear = 0x202020; 
 box_r = 0.16; box_g = 0.16; box_b = 0.16;
 txt_r = 0.9; txt_g = 0.9; txt_b = 0.9;
@@ -346,7 +348,6 @@ function draw_toggle_btn(x, y, w, h, title, state, node_id) (
     state ? gfx_set(acc_r, acc_g, acc_b, 1) : gfx_set(0.3, 0.3, 0.3, 1);
     gfx_circle(led_x, led_y, led_size, 1);
     
-    // CHANGED: Increased font size to 16 to match the Bypass button
     gfx_set(txt_r, txt_g, txt_b, state ? 1 : 0.7);
     gfx_setfont(1, "Arial", 16, 'b'); 
     gfx_measurestr(title, tw, th);
@@ -355,14 +356,8 @@ function draw_toggle_btn(x, y, w, h, title, state, node_id) (
 );
 
 function draw_big_bypass(x, y, w, h, state, node_id) (
-    state ? (
-        gfx_set(0.6, 0.1, 0.1, 1);
-    ) : (
-        gfx_set(0.1, 0.6, 0.1, 1);
-    );
-
+    state ? gfx_set(0.6, 0.1, 0.1, 1) : gfx_set(0.1, 0.6, 0.1, 1);
     hover_node != node_id ? gfx_set(gfx_r*0.8, gfx_g*0.8, gfx_b*0.8, 1);
-
     gfx_rect(x, y, w, h);
 
     gfx_set(1,1,1,1);
@@ -375,19 +370,16 @@ function draw_big_bypass(x, y, w, h, state, node_id) (
 );
 
 function draw_radio_btn(x, y, w, h, title, is_selected, node_id) (
-    // Button BG
     hover_node == node_id ? gfx_set(box_r*1.6, box_g*1.6, box_b*1.6, 1) : gfx_set(box_r, box_g, box_b, 1);
     is_selected ? gfx_set(acc_r*0.7, acc_g*0.7, acc_b*0.7, 1);
     gfx_rect(x, y, w, h);
     
-    // Highlight Border
     is_selected ? (
         gfx_set(1, 1, 1, 0.8);
-        gfx_rect(x, y, w, 2); // Top border
-        gfx_rect(x, y+h-2, w, 2); // Bottom
+        gfx_rect(x, y, w, 2); 
+        gfx_rect(x, y+h-2, w, 2); 
     );
 
-    // Text (Number only)
     gfx_set(txt_r, txt_g, txt_b, is_selected ? 1 : 0.6);
     gfx_setfont(1, "Arial", 12, 'b');
     gfx_measurestr(title, tw, th);
@@ -395,7 +387,7 @@ function draw_radio_btn(x, y, w, h, title, is_selected, node_id) (
     gfx_drawstr(title);
 );
 
-// --- MOUSE LOGIC ---
+// --- MOUSE & HIT TESTING LOGIC ---
 mouse_down = mouse_cap & 1; 
 mouse_click = mouse_down && !last_mouse_cap;
 mouse_dbl_click = mouse_click && (time_precise() - last_click_time < 0.25);
@@ -403,7 +395,7 @@ mouse_click ? last_click_time = time_precise();
 hover_node = -1; 
 mx = mouse_x; my = mouse_y;
 
-// Grid
+// Grid layout metrics for standard controls
 c1_x = margin;
 c2_x = margin + col_w;
 c3_x = margin + col_w*2;
@@ -413,35 +405,136 @@ r2_y = r1_y + row_h + margin;
 box_w = col_w - margin;
 box_h = row_h;
 
-// Hit Testing
-my > r2_y && my < r2_y + box_h ? (
-    // FFT Selector Buttons
-    btn_w = box_w / 2;
-    
-    // 1024
-    mx > c1_x && mx < c1_x + btn_w ? hover_node = 10;
-    // 2048
-    mx > c1_x + btn_w + 2 && mx < c1_x + btn_w*2 + 2 ? hover_node = 11;
-    // 4096
-    mx > c2_x && mx < c2_x + btn_w ? hover_node = 12;
-    // 8192
-    mx > c2_x + btn_w + 2 && mx < c2_x + btn_w*2 + 2 ? hover_node = 13;
+// Dynamic Bounds Setup for graph manipulation
+g_x_int = margin; 
+g_y_int = header_h + margin; 
+g_w_int = gfx_w - margin*2; 
+g_h_int = graph_h;
+log_min_int = log(20);
+scale_x_int = g_w_int / (log(srate * 0.5) - log_min_int);
 
-    // Delta / Bypass
-    mx > c3_x && mx < c3_x + box_w ? hover_node = 8; 
-    mx > c4_x && mx < c4_x + box_w ? hover_node = 9; 
+// Map slider values to screen pixel coordinates
+x_min_handle = g_x_int + (log(slider1) - log_min_int) * scale_x_int;
+x_max_handle = g_x_int + (log(slider2) - log_min_int) * scale_x_int;
+y_thresh_handle = g_y_int + (-slider3 / 60) * g_h_int; 
+
+// Horizontal Custom UI Bar Bounds
+amt_x = margin;
+amt_y = g_y_int + g_h_int + 15; 
+amt_w = g_w_int;
+amt_h = 24;
+
+tilt_w = 16;
+tilt_x = g_x_int;
+tilt_y = g_y_int;
+tilt_h = g_h_int;
+
+rel_x = c3_x;
+rel_w = (c4_x + box_w) - c3_x;
+rel_h = 24;
+rel_y = r2_y - rel_h - 10;
+
+out_w = 140;
+out_h = header_h;
+out_x = gfx_w - margin - out_w;
+out_y = 0;
+
+// Identify hovered element based on visual layering priority
+drag_mode == 0 ? (
+    mx >= tilt_x && mx <= tilt_x + tilt_w && my >= tilt_y && my <= tilt_y + tilt_h ? hover_node = 106 :
+    mx >= rel_x && mx <= rel_x + rel_w && my >= rel_y && my <= rel_y + rel_h ? hover_node = 105 :
+    mx >= out_x && mx <= out_x + out_w && my >= out_y && my <= out_y + out_h ? hover_node = 107 :
+    mx >= amt_x && mx <= amt_x + amt_w && my >= amt_y && my <= amt_y + amt_h ? hover_node = 104 :
+    abs(mx - x_min_handle) < 8 && my > g_y_int && my < g_y_int + g_h_int ? hover_node = 101 :
+    abs(mx - x_max_handle) < 8 && my > g_y_int && my < g_y_int + g_h_int ? hover_node = 102 :
+    abs(my - y_thresh_handle) < 8 && mx > g_x_int && mx < g_x_int + g_w_int ? hover_node = 103 : 0;
 );
 
-// Interaction
+// Hit Testing for original bottom row buttons
+my > r2_y && my < r2_y + box_h ? (
+    btn_w = box_w / 2;
+    mx > c1_x && mx < c1_x + btn_w ? hover_node = 10; // 1024
+    mx > c1_x + btn_w + 2 && mx < c1_x + btn_w*2 + 2 ? hover_node = 11; // 2048
+    mx > c2_x && mx < c2_x + btn_w ? hover_node = 12; // 4096
+    mx > c2_x + btn_w + 2 && mx < c2_x + btn_w*2 + 2 ? hover_node = 13; // 8192
+    mx > c3_x && mx < c3_x + box_w ? hover_node = 8; // Delta
+    mx > c4_x && mx < c4_x + box_w ? hover_node = 9; // Bypass
+);
+
+// User Interaction triggers
 mouse_click ? (
-    hover_node == 8 ? ( slider8 = !slider8; slider_automate(slider8); );
-    hover_node == 9 ? ( slider9 = !slider9; slider_automate(slider9); );
-    
-    // FFT Size Selection
-    hover_node == 10 ? ( slider10 = 0; slider_automate(slider10); );
-    hover_node == 11 ? ( slider10 = 1; slider_automate(slider10); );
-    hover_node == 12 ? ( slider10 = 2; slider_automate(slider10); );
-    hover_node == 13 ? ( slider10 = 3; slider_automate(slider10); );
+    mouse_dbl_click && hover_node == 107 ? (
+        // Reset output to unity gain (0dB) on double click
+        slider7 = 0;
+        slider_automate(slider7);
+        update_dsp = 1;
+        drag_mode = 0; 
+    ) : (
+        hover_node == 8 ? ( slider8 = !slider8; slider_automate(slider8); );
+        hover_node == 9 ? ( slider9 = !slider9; slider_automate(slider9); );
+        
+        hover_node == 10 ? ( slider10 = 0; slider_automate(slider10); );
+        hover_node == 11 ? ( slider10 = 1; slider_automate(slider10); );
+        hover_node == 12 ? ( slider10 = 2; slider_automate(slider10); );
+        hover_node == 13 ? ( slider10 = 3; slider_automate(slider10); );
+        
+        // Map hover elements to drag modes
+        hover_node == 101 ? drag_mode = 1 : // Frequency Min
+        hover_node == 102 ? drag_mode = 2 : // Frequency Max
+        hover_node == 103 ? drag_mode = 3 : // Threshold
+        hover_node == 104 ? drag_mode = 4 : // Amount
+        hover_node == 105 ? drag_mode = 5 : // Release
+        hover_node == 106 ? drag_mode = 6 : // Tilt
+        hover_node == 107 ? (drag_mode = 7; drag_start_y = my; drag_start_val = slider7;) : 0; // Output
+    );
+);
+
+// Process dragging math with collision detection and parameter scaling
+mouse_down && drag_mode > 0 ? (
+    drag_mode == 1 ? (
+        val = exp((mx - g_x_int) / scale_x_int + log_min_int);
+        slider1 = max(20, min(floor(val / 10 + 0.5) * 10, min(15000, slider2 - 10)));
+        slider_automate(slider1);
+        update_dsp = 1;
+    );
+    drag_mode == 2 ? (
+        val = exp((mx - g_x_int) / scale_x_int + log_min_int);
+        slider2 = max(max(40, slider1 + 10), min(floor(val / 10 + 0.5) * 10, 22000));
+        slider_automate(slider2);
+        update_dsp = 1; 
+    );
+    drag_mode == 3 ? (
+        val = -((my - g_y_int) / g_h_int) * 60;
+        slider3 = max(-60, min(floor(val * 10 + 0.5) / 10, 0));
+        slider_automate(slider3);
+        update_dsp = 1; 
+    );
+    drag_mode == 4 ? (
+        val = (mx - amt_x) / amt_w * 100;
+        slider4 = max(0, min(floor(val + 0.5), 100));
+        slider_automate(slider4);
+        update_dsp = 1; 
+    );
+    drag_mode == 5 ? (
+        val = 10 + ((mx - rel_x) / rel_w) * 990;
+        slider5 = max(10, min(floor(val + 0.5), 1000));
+        slider_automate(slider5);
+        update_dsp = 1;
+    );
+    drag_mode == 6 ? (
+        val = 1.0 - ((my - tilt_y) / tilt_h) * 2.0;
+        slider6 = max(-1.0, min(floor(val * 100 + 0.5) / 100, 1.0));
+        slider_automate(slider6);
+        update_dsp = 1;
+    );
+    drag_mode == 7 ? (
+        val = drag_start_val - (my - drag_start_y) * 0.2; 
+        slider7 = max(-24, min(floor(val * 10 + 0.5) / 10, 24));
+        slider_automate(slider7);
+        update_dsp = 1;
+    );
+) : !mouse_down ? (
+    drag_mode = 0;
 );
 
 last_mouse_cap = mouse_down; last_mouse_y = mouse_y;
@@ -452,6 +545,14 @@ gfx_set(txt_r, txt_g, txt_b, 1);
 gfx_setfont(1, "Arial", 16, 'b');
 gfx_x = margin; gfx_y = 6; 
 gfx_drawstr("SPECTRAL HARSHNESS CONTROL");
+
+// Interactive Output Gain display
+gfx_set(txt_r, txt_g, txt_b, hover_node == 107 || drag_mode == 7 ? 1.0 : 0.8);
+sprintf(#out_str, "OUTPUT: %.1f DB", slider7);
+gfx_measurestr(#out_str, sw, sh);
+gfx_x = gfx_w - margin - sw; 
+gfx_y = (header_h - sh) / 2;
+gfx_drawstr(#out_str);
 
 // --- DRAW GRAPH ---
 g_x = margin; g_y = header_h + margin; 
@@ -464,6 +565,7 @@ log_min = log(20);
 log_max = log(srate * 0.5);
 scale_x = g_w / (log_max - log_min);
 
+// Draw Graph Grid
 gfx_set(0.3, 0.3, 0.3, 1);
 f_grid = 50;
 loop(9, 
@@ -480,7 +582,7 @@ loop(9,
     f_grid == 5000 ? f_grid = 10000 : f_grid = 20000;
 );
 
-// Colors (Tilt)
+// Map visual curve color based on Tilt slider polarity
 base_r = 1.0; base_g = 0.4; base_b = 0.7; 
 white_r = 1.0; white_g = 1.0; white_b = 1.0;
 brown_r = 0.55; brown_g = 0.27; brown_b = 0.07;
@@ -493,7 +595,7 @@ slider6 > 0 ? (
     cur_r = base_r + (brown_r - base_r) * t; cur_g = base_g + (brown_g - base_g) * t; cur_b = base_b + (brown_b - base_b) * t;
 );
 
-// Draw Curve
+// Draw Attenuation Curve
 gfx_set(cur_r, cur_g, cur_b, 0.9);
 gi = 1; bin_w_hz = srate / fft_size;
 loop(fft_size_halved - 1,
@@ -511,7 +613,104 @@ loop(fft_size_halved - 1,
     gi += 1;
 );
 
-// --- DRAW INFO LABEL (Selected FFT Description) ---
+// Draw Interactive Tilt Bar (Vertical Bipolar UI)
+gfx_set(0.12, 0.12, 0.15, 0.9);
+gfx_rect(tilt_x, tilt_y, tilt_w, tilt_h);
+
+hover_node == 106 || drag_mode == 6 ? gfx_set(0.9, 0.75, 0.2, 0.9) : gfx_set(0.85, 0.7, 0.15, 0.7);
+center_y = tilt_y + tilt_h / 2;
+tilt_val = slider6; 
+tilt_bar_h = abs(tilt_val) * (tilt_h / 2);
+tilt_val > 0 ? (
+    gfx_rect(tilt_x, center_y - tilt_bar_h, tilt_w, tilt_bar_h);
+) : (
+    gfx_rect(tilt_x, center_y, tilt_w, tilt_bar_h);
+);
+
+gfx_set(0.9, 0.9, 0.9, 0.9);
+gfx_setfont(2, "Arial", 10, 'b');
+gfx_measurestr("T", tw, th); gfx_x = tilt_x + (tilt_w - tw)/2; gfx_y = tilt_y + 14; gfx_drawstr("T");
+gfx_measurestr("I", tw, th); gfx_x = tilt_x + (tilt_w - tw)/2; gfx_y = tilt_y + 26; gfx_drawstr("I");
+gfx_measurestr("L", tw, th); gfx_x = tilt_x + (tilt_w - tw)/2; gfx_y = tilt_y + 38; gfx_drawstr("L");
+gfx_measurestr("T", tw, th); gfx_x = tilt_x + (tilt_w - tw)/2; gfx_y = tilt_y + 50; gfx_drawstr("T");
+
+
+// Draw Graph Overlays (Frequency Boundaries & Threshold)
+gfx_setfont(2, "Arial", 10, 'n');
+
+// Freq Min Indicator
+x_min_draw = g_x + (log(slider1) - log_min) * scale_x;
+gfx_set(0.2, 0.7, 1.0, hover_node == 101 || drag_mode == 1 ? 1.0 : 0.4);
+gfx_rect(x_min_draw - 1, g_y, 2, g_h);
+gfx_x = x_min_draw + 4; gfx_y = g_y + 4;
+gfx_drawstr("MIN");
+
+// Freq Max Indicator
+x_max_draw = g_x + (log(slider2) - log_min) * scale_x;
+gfx_set(0.2, 0.7, 1.0, hover_node == 102 || drag_mode == 2 ? 1.0 : 0.4);
+gfx_rect(x_max_draw - 1, g_y, 2, g_h);
+gfx_x = x_max_draw - 28; gfx_y = g_y + 4;
+gfx_drawstr("MAX");
+
+// Threshold Line Indicator (Offsets X to avoid Tilt Bar overlapping)
+y_thresh_draw = g_y + (-slider3 / 60) * g_h;
+gfx_set(1.0, 0.8, 0.2, hover_node == 103 || drag_mode == 3 ? 1.0 : 0.4);
+gfx_rect(g_x, y_thresh_draw - 1, g_w, 2);
+gfx_x = g_x + tilt_w + 6; gfx_y = y_thresh_draw - 14;
+gfx_drawstr("THR");
+
+
+// Draw Interactive Amount Bar 
+gfx_set(0.12, 0.12, 0.15, 1);
+gfx_rect(amt_x, amt_y, amt_w, amt_h);
+
+fill_w = (slider4 / 100) * amt_w;
+hover_node == 104 || drag_mode == 4 ? gfx_set(0.45, 0.35, 0.95, 1) : gfx_set(0.35, 0.25, 0.85, 0.9);
+gfx_rect(amt_x, amt_y, fill_w, amt_h);
+
+gfx_set(1, 1, 1, 0.1);
+gfx_rect(amt_x, amt_y, amt_w, amt_h, 0);
+
+gfx_set(1, 1, 1, 0.9);
+gfx_setfont(1, "Arial", 14, 'b');
+gfx_measurestr("AMOUNT", txt_w, txt_h);
+gfx_x = amt_x + 10;
+gfx_y = amt_y + (amt_h - txt_h) / 2;
+gfx_drawstr("AMOUNT");
+
+sprintf(#amt_str, "%d %%", slider4);
+gfx_measurestr(#amt_str, txt_w, txt_h);
+gfx_x = amt_x + amt_w - txt_w - 10;
+gfx_y = amt_y + (amt_h - txt_h) / 2;
+gfx_drawstr(#amt_str);
+
+
+// Draw Interactive Release Bar
+gfx_set(0.12, 0.12, 0.15, 1);
+gfx_rect(rel_x, rel_y, rel_w, rel_h);
+
+fill_w_rel = ((slider5 - 10) / 990) * rel_w;
+hover_node == 105 || drag_mode == 5 ? gfx_set(0.65, 0.55, 0.25, 1) : gfx_set(0.55, 0.45, 0.15, 0.9); 
+gfx_rect(rel_x, rel_y, fill_w_rel, rel_h);
+
+gfx_set(1, 1, 1, 0.1);
+gfx_rect(rel_x, rel_y, rel_w, rel_h, 0);
+
+gfx_set(1, 1, 1, 0.9);
+gfx_setfont(1, "Arial", 14, 'b');
+gfx_measurestr("RELEASE", txt_w, txt_h);
+gfx_x = rel_x + 10;
+gfx_y = rel_y + (rel_h - txt_h) / 2;
+gfx_drawstr("RELEASE");
+
+sprintf(#rel_str, "%d MS", slider5);
+gfx_measurestr(#rel_str, txt_w, txt_h);
+gfx_x = rel_x + rel_w - txt_w - 10;
+gfx_y = rel_y + (rel_h - txt_h) / 2;
+gfx_drawstr(#rel_str);
+
+
+// --- DRAW INFO LABEL (Selected FFT Profile) ---
 gfx_set(acc_r, acc_g, acc_b, 1);
 gfx_setfont(1, "Arial", 14, 'b');
 
@@ -521,12 +720,11 @@ slider10 == 2 ? info_str = "4096 (Default / Precision)" :
 info_str = "8192 (High Res / Mastering)";
 
 gfx_x = c1_x; 
-gfx_y = r2_y - 20; // Position above buttons
+gfx_y = r2_y - 20;
 gfx_drawstr(info_str);
 
-// --- DRAW CONTROLS ---
 
-// FFT Size Buttons (Layout: 4 buttons in C1/C2 area)
+// --- DRAW BOTTOM TOGGLE CONTROLS ---
 btn_w = box_w / 2;
 draw_radio_btn(c1_x, r2_y, btn_w, box_h, "1024", slider10 == 0, 10);
 draw_radio_btn(c1_x + btn_w + 2, r2_y, btn_w, box_h, "2048", slider10 == 1, 11);
