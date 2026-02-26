@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="3670efbc3bccb6e0342d5003e93fcd04da4ab95c">
+<index version="1" name="DocShadrach FXs" commit="d6df34e4109782c48de6f73005878b082e5f12e5">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -543,6 +543,10 @@ Tame the harshness without killing the vibe.
     <version name="1.0.1" author="Doc Shadrach" time="2026-02-25T07:00:00Z">
      <changelog><![CDATA[Now the ACTIVE button is green.]]></changelog>
     <source file="Spectral_Harshness_Control.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/3670efbc3bccb6e0342d5003e93fcd04da4ab95c/Spectral_Harshness_Control.jsfx</source>
+    </version>
+    <version name="1.1.0" author="Doc Shadrach" time="2026-02-26T07:00:00Z">
+     <changelog><![CDATA[The plugin now has no sliders, only a GUI.]]></changelog>
+    <source file="Spectral_Harshness_Control.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/d6df34e4109782c48de6f73005878b082e5f12e5/Spectral_Harshness_Control.jsfx</source>
     </version>
     </reapack>
   
