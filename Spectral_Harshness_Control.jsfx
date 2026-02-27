@@ -1,6 +1,6 @@
 desc: Spectral Harshness Control (DocShadrach)
 // author: Doc Shadrach
-// version: 1.1
+// version: 1.2
 // about: Tame the harshness without killing the vibe.
 //
 // Copyright (c) 2026 DocShadrach
@@ -306,12 +306,9 @@ slider8 == 1 ? (
     out_r = dry_r - out_r;
 );
 
-// Apply Output Gain & Clip Safety
+// Apply Output Gain
 out_l *= out_gain;
 out_r *= out_gain;
-
-out_l = max(-1.0, min(1.0, out_l));
-out_r = max(-1.0, min(1.0, out_r));
 
 // Main Bypass
 slider9 == 1 ? (
