@@ -1,6 +1,6 @@
 desc: Spectral Harshness Control (DocShadrach)
 // author: Doc Shadrach
-// version: 1.2
+// version: 1.3
 // about: Tame the harshness without killing the vibe.
 //
 // Copyright (c) 2026 DocShadrach
@@ -20,6 +20,7 @@ slider7:0<-24,24,0.1>-Output Gain (dB)
 slider8:0<0,1,1{Off,On}>-Delta Listen
 slider9:0<0,1,1{Off,On}>-Bypass
 slider10:2<0,3,1{1024,2048,4096,8192}>-FFT Size
+slider11:0<0,100,1>-Focus (%)
 
 in_pin:left input
 in_pin:right input
@@ -109,12 +110,28 @@ function calc_params() (
     tilt_mod = slider6 * 0.2; 
     final_exponent = base_exponent - tilt_mod;
 
-    // Populate the reference target array (Pink noise profile + Tilt)
+    // Precalculate Focus parameters
+    log_min_f = log(slider1);
+    log_max_f = log(slider2);
+    log_range = log_max_f - log_min_f;
+    focus_amt = slider11 / 100.0;
+    max_dip_db = 24.0; // Max attenuation depth at 100% Focus
+
+    // Populate the reference target array (Pink noise profile + Tilt + Focus)
     i = 0;
     loop(fft_size_halved,
         val = 0;
         i > 0 ? (
             val = 1.0 / pow(i, final_exponent);
+            
+            // Apply Focus Dip (Curving the threshold deeper at center freq)
+            bin_f = i * bin_hz;
+            bin_f >= slider1 && bin_f <= slider2 && log_range > 0 && slider11 > 0 ? (
+                p = (log(bin_f) - log_min_f) / log_range; // Normalize position [0, 1]
+                dip_shape = sin(p * $pi); // Smooth sine curve mapped to log bounds
+                dip_db = -(focus_amt * max_dip_db) * dip_shape; // Negative DB modifier
+                val *= 10 ^ (dip_db / 20); // Apply linear dip scaling
+            );
         );
         mem[offset_pink + i] = val;
         mem[offset_vis_pink + i] = val;
@@ -402,6 +419,9 @@ r2_y = r1_y + row_h + margin;
 box_w = col_w - margin;
 box_h = row_h;
 
+btn_res_h = 24; 
+btn_res_y = r2_y + box_h - btn_res_h;
+
 // Dynamic Bounds Setup for graph manipulation
 g_x_int = margin; 
 g_y_int = header_h + margin; 
@@ -431,6 +451,11 @@ rel_w = (c4_x + box_w) - c3_x;
 rel_h = 24;
 rel_y = r2_y - rel_h - 10;
 
+focus_x = margin;
+focus_w = c3_x - margin - 10;
+focus_y = rel_y;
+focus_h = 24;
+
 out_w = 140;
 out_h = header_h;
 out_x = gfx_w - margin - out_w;
@@ -440,6 +465,7 @@ out_y = 0;
 drag_mode == 0 ? (
     mx >= tilt_x && mx <= tilt_x + tilt_w && my >= tilt_y && my <= tilt_y + tilt_h ? hover_node = 106 :
     mx >= rel_x && mx <= rel_x + rel_w && my >= rel_y && my <= rel_y + rel_h ? hover_node = 105 :
+    mx >= focus_x && mx <= focus_x + focus_w && my >= focus_y && my <= focus_y + focus_h ? hover_node = 108 :
     mx >= out_x && mx <= out_x + out_w && my >= out_y && my <= out_y + out_h ? hover_node = 107 :
     mx >= amt_x && mx <= amt_x + amt_w && my >= amt_y && my <= amt_y + amt_h ? hover_node = 104 :
     abs(mx - x_min_handle) < 8 && my > g_y_int && my < g_y_int + g_h_int ? hover_node = 101 :
@@ -450,12 +476,16 @@ drag_mode == 0 ? (
 // Hit Testing for original bottom row buttons
 my > r2_y && my < r2_y + box_h ? (
     btn_w = box_w / 2;
-    mx > c1_x && mx < c1_x + btn_w ? hover_node = 10; // 1024
-    mx > c1_x + btn_w + 2 && mx < c1_x + btn_w*2 + 2 ? hover_node = 11; // 2048
-    mx > c2_x && mx < c2_x + btn_w ? hover_node = 12; // 4096
-    mx > c2_x + btn_w + 2 && mx < c2_x + btn_w*2 + 2 ? hover_node = 13; // 8192
+    
     mx > c3_x && mx < c3_x + box_w ? hover_node = 8; // Delta
     mx > c4_x && mx < c4_x + box_w ? hover_node = 9; // Bypass
+    
+    my > btn_res_y && my < btn_res_y + btn_res_h ? (
+        mx > c1_x && mx < c1_x + btn_w ? hover_node = 10; // 1024
+        mx > c1_x + btn_w + 2 && mx < c1_x + btn_w*2 + 2 ? hover_node = 11; // 2048
+        mx > c2_x && mx < c2_x + btn_w ? hover_node = 12; // 4096
+        mx > c2_x + btn_w + 2 && mx < c2_x + btn_w*2 + 2 ? hover_node = 13; // 8192
+    );
 );
 
 // User Interaction triggers
@@ -482,7 +512,8 @@ mouse_click ? (
         hover_node == 104 ? drag_mode = 4 : // Amount
         hover_node == 105 ? drag_mode = 5 : // Release
         hover_node == 106 ? drag_mode = 6 : // Tilt
-        hover_node == 107 ? (drag_mode = 7; drag_start_y = my; drag_start_val = slider7;) : 0; // Output
+        hover_node == 107 ? (drag_mode = 7; drag_start_y = my; drag_start_val = slider7;) : // Output
+        hover_node == 108 ? drag_mode = 8 : 0; // Focus
     );
 );
 
@@ -528,6 +559,12 @@ mouse_down && drag_mode > 0 ? (
         val = drag_start_val - (my - drag_start_y) * 0.2; 
         slider7 = max(-24, min(floor(val * 10 + 0.5) / 10, 24));
         slider_automate(slider7);
+        update_dsp = 1;
+    );
+    drag_mode == 8 ? (
+        val = (mx - focus_x) / focus_w * 100;
+        slider11 = max(0, min(floor(val + 0.5), 100));
+        slider_automate(slider11);
         update_dsp = 1;
     );
 ) : !mouse_down ? (
@@ -649,11 +686,38 @@ gfx_rect(x_max_draw - 1, g_y, 2, g_h);
 gfx_x = x_max_draw - 28; gfx_y = g_y + 4;
 gfx_drawstr("MAX");
 
-// Threshold Line Indicator (Offsets X to avoid Tilt Bar overlapping)
-y_thresh_draw = g_y + (-slider3 / 60) * g_h;
+// Threshold Line Indicator (With Focus bend)
+y_thresh_base = g_y + (-slider3 / 60) * g_h;
 gfx_set(1.0, 0.8, 0.2, hover_node == 103 || drag_mode == 3 ? 1.0 : 0.4);
-gfx_rect(g_x, y_thresh_draw - 1, g_w, 2);
-gfx_x = g_x + tilt_w + 6; gfx_y = y_thresh_draw - 14;
+
+ix = 0;
+log_range_vis = log(slider2) - log(slider1);
+loop(g_w,
+    x_pos = g_x + ix;
+    freq = exp((ix / scale_x) + log_min);
+    
+    y_pos = y_thresh_base;
+    freq >= slider1 && freq <= slider2 && slider11 > 0 && log_range_vis > 0 ? (
+        p = (log(freq) - log(slider1)) / log_range_vis;
+        dip_shape = sin(p * $pi);
+        dip_db = (slider11 / 100.0) * 24.0 * dip_shape; // Draw positive adding dip to Y
+        y_pos += (dip_db / 60) * g_h; 
+    );
+    
+    ix == 0 ? ( 
+        gfx_x = x_pos; gfx_y = y_pos; 
+        last_y = y_pos;
+    ) : ( 
+        // 2px thick line drawing
+        gfx_line(x_pos - 1, last_y, x_pos, y_pos, 1);
+        gfx_line(x_pos - 1, last_y - 1, x_pos, y_pos - 1, 1);
+        gfx_x = x_pos; gfx_y = y_pos;
+        last_y = y_pos;
+    );
+    ix += 1;
+);
+
+gfx_x = g_x + tilt_w + 6; gfx_y = y_thresh_base - 14;
 gfx_drawstr("THR");
 
 
@@ -680,6 +744,31 @@ gfx_measurestr(#amt_str, txt_w, txt_h);
 gfx_x = amt_x + amt_w - txt_w - 10;
 gfx_y = amt_y + (amt_h - txt_h) / 2;
 gfx_drawstr(#amt_str);
+
+
+// Draw Interactive Focus Bar
+gfx_set(0.12, 0.12, 0.15, 1);
+gfx_rect(focus_x, focus_y, focus_w, focus_h);
+
+fill_w_foc = (slider11 / 100) * focus_w;
+hover_node == 108 || drag_mode == 8 ? gfx_set(0.7, 0.7, 0.75, 1) : gfx_set(0.6, 0.6, 0.65, 0.9);
+gfx_rect(focus_x, focus_y, fill_w_foc, focus_h);
+
+gfx_set(1, 1, 1, 0.1);
+gfx_rect(focus_x, focus_y, focus_w, focus_h, 0);
+
+gfx_set(1, 1, 1, 0.9);
+gfx_setfont(1, "Arial", 14, 'b');
+gfx_measurestr("FOCUS", txt_w, txt_h);
+gfx_x = focus_x + 10;
+gfx_y = focus_y + (focus_h - txt_h) / 2;
+gfx_drawstr("FOCUS");
+
+sprintf(#foc_str, "%d %%", slider11);
+gfx_measurestr(#foc_str, txt_w, txt_h);
+gfx_x = focus_x + focus_w - txt_w - 10;
+gfx_y = focus_y + (focus_h - txt_h) / 2;
+gfx_drawstr(#foc_str);
 
 
 // Draw Interactive Release Bar
@@ -717,17 +806,19 @@ slider10 == 2 ? info_str = "4096 (Default / Precision)" :
 info_str = "8192 (High Res / Mastering)";
 
 gfx_x = c1_x; 
-gfx_y = r2_y - 20;
+gfx_y = btn_res_y - 20; // Re-positioned right above the smaller buttons
 gfx_drawstr(info_str);
 
 
 // --- DRAW BOTTOM TOGGLE CONTROLS ---
 btn_w = box_w / 2;
-draw_radio_btn(c1_x, r2_y, btn_w, box_h, "1024", slider10 == 0, 10);
-draw_radio_btn(c1_x + btn_w + 2, r2_y, btn_w, box_h, "2048", slider10 == 1, 11);
 
-draw_radio_btn(c2_x, r2_y, btn_w, box_h, "4096", slider10 == 2, 12);
-draw_radio_btn(c2_x + btn_w + 2, r2_y, btn_w, box_h, "8192", slider10 == 3, 13);
+// Draw smaller Resolution buttons positioned underneath Focus logic
+draw_radio_btn(c1_x, btn_res_y, btn_w, btn_res_h, "1024", slider10 == 0, 10);
+draw_radio_btn(c1_x + btn_w + 2, btn_res_y, btn_w, btn_res_h, "2048", slider10 == 1, 11);
+
+draw_radio_btn(c2_x, btn_res_y, btn_w, btn_res_h, "4096", slider10 == 2, 12);
+draw_radio_btn(c2_x + btn_w + 2, btn_res_y, btn_w, btn_res_h, "8192", slider10 == 3, 13);
 
 draw_toggle_btn(c3_x, r2_y, box_w, box_h, "DELTA", slider8, 8);
 draw_big_bypass(c4_x, r2_y, box_w, box_h, slider9, 9);
