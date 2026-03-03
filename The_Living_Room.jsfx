@@ -1,0 +1,1011 @@
+desc: The Living Room (DocShadrach)
+// author: Doc Shadrach
+// version: 1.0
+// about: An Eco-System Reverb.
+// -----------------------------------------------------------------------------
+// CREDITS & ATTRIBUTION:
+// Reverb Core architecture (FDN 8x8, Prime Numbers, Internal Saturation)
+// inspired by Airwindows algorithms (kPlate240, kGuitarHall2, kCathedral5)
+// by Chris Johnson. Ported and adapted for JSFX under MIT License.
+// Copyright (c) 2018 Chris Johnson
+// -----------------------------------------------------------------------------
+// Copyright (c) 2026 DocShadrach
+// All rights reserved.
+// Licensed for use inside REAPER for personal or professional projects only.
+// Modification, copying, redistribution, or creating derivative works is prohibited.
+// See LICENSE file in the repository for full terms.
+
+options:gmem=TheLivingRoomSys
+
+slider1:p_mode=0<0,1,1{Satellite (Track Sensor),Core (Reverb Engine)}>Operation Mode
+
+// --- SATELLITE SETTINGS ---
+slider2:p_priority=2<0,4,1{1 - Focus / Front,2 - Close / Support,3 - Mid / Body,4 - Far / Backdrop,5 - Ghost / Deep}>[-Sat] Hierarchy Priority
+slider3:p_send=-6<-60,12,0.1>[-Sat] Send Level (dB) to CH 3/4
+slider4:p_sat_char=0<-50,50,1>[-Sat] Tone (Dark <-> Bright)
+slider5:p_link_id=0<0,12,1>[-Sat] Link Group ID (0=Off)
+slider6:p_sat_enable=1<0,1,1{Muted,Active}>[-Sat] Local Status
+slider7:p_predelay_mode=0<0,6,1{Auto (Smart Depth),None (0ms),1/64,1/32,1/16,1/8,1/4}>[-Sat] Pre-Delay
+
+// --- CORE SETTINGS ---
+slider20:p_man_decay=4500<1000,10000,10>[-Core] Max Decay (ms)
+slider21:p_man_inertia=2<0,4,1{Fast,Medium,Slow,Very Slow,Cinematic}>[-Core] Morph Speed
+slider22:p_man_drive=20<0,100,1>[-Core] Analog Density %
+slider23:p_man_noise=-110<-140,-60,1>[-Core] Noise Floor (dB)
+slider24:p_man_width=100<0,150,1>[-Core] Stereo Width %
+slider25:p_man_morph_enable=1<0,1,1{Static Texture (Use Sliders below),Dynamic Morphing (Auto-Texture)}>[-Core] Texture Mode
+slider26:p_man_diff=70<0,100,1>[-Core] Input Diffusion (Static)
+slider27:p_man_hp=600<20,1000,1>[-Core] Abbey HPF (Hz)
+slider28:p_man_lp=10000<2000,20000,1>[-Core] Abbey LPF (Hz)
+slider29:p_man_spec=0<0,100,1>[-Core] Spectral Focus %
+slider33:p_man_bits=24<8,24,1>[-Core] Output Resolution (Bits)
+
+// --- SHARED OUTPUT ---
+slider15:p_out_trim=0<-12,12,0.1>[-Core] Output Gain
+
+// --- ADVANCED SETTINGS ---
+slider30:p_adv_decay=100<50,150,1>[Adv] Decay Scaling %
+slider31:p_adv_width=100<0,150,1>[Adv] Width %
+slider32:p_adv_duck=30<0,100,1>[Global] Crowd Ducking Amount %
+
+// --- GLOBAL METERS & STATES ---
+slider60:p_bypass=0<0,1,1{Active,Bypassed}>-Global Soft Bypass
+slider61:m_crowd=0<0,50,1>-Crowd Density
+slider62:m_reduc=0<0,12,0.1>-Auto-Mixing (dB)
+slider63:m_morph=0<0,100,1>-Morph State (Hall->Plate)
+slider64:p_gui_preset=0<0,3,1>-GUI Preset State
+
+// --- HIDDEN INTERNAL VARIABLES ---
+slider65:p_lookahead=1<0,1,1>-
+slider66:p_auto_depth=100<0,100,1>-
+slider67:p_transient_duck=30<0,100,1>-
+
+in_pin:left input
+in_pin:right input
+in_pin:aux left
+in_pin:aux right
+out_pin:left output
+out_pin:right output
+out_pin:aux left
+out_pin:aux right
+
+@init
+
+// ==============================================================================
+// 1. DSP FUNCTIONS
+// ==============================================================================
+
+function soft_clip(x) ( x > 1 ? 1 : (x < -1 ? -1 : (1.5 * x - 0.5 * x * x * x)); );
+function hard_clip(x) ( max(-1.0, min(1.0, x)); ); 
+
+// DC Blocker / Rumble Filter
+function rumble_cut(in, coeff) instance(last_x, last_y) (
+  last_y = coeff * (last_y + in - last_x);
+  last_x = in;
+  last_y;
+);
+
+// Delay Line Reader (Linear Interpolation)
+function GetDelayFDN(mem_start, write_pos, delay_samps, buffer_size)
+local(read_pos, i, f, s0, s1)
+(
+  read_pos = write_pos - delay_samps;
+  while (read_pos < 0) ( read_pos += buffer_size; );
+  while (read_pos >= buffer_size) ( read_pos -= buffer_size; );
+  i = floor(read_pos); f = read_pos - i;
+  s0 = mem[mem_start + i]; 
+  i += 1; i >= buffer_size ? i = 0; s1 = mem[mem_start + i]; 
+  s0 + f * (s1 - s0);
+);
+
+// Hadamard Mixer 8x8 (Writes to GLOBAL ho0..ho7)
+function hadamard_mix_8(i0,i1,i2,i3,i4,i5,i6,i7)
+local(a0,a1,a2,a3,a4,a5,a6,a7, scale)
+(
+  a0=i0+i1; a1=i0-i1; a2=i2+i3; a3=i2-i3; a4=i4+i5; a5=i4-i5; a6=i6+i7; a7=i6-i7;
+  i0=a0+a2; i1=a1+a3; i2=a0-a2; i3=a1-a3; i4=a4+a6; i5=a5+a7; i6=a4-a6; i7=a5-a7;
+  ho0=i0+i4; ho1=i1+i5; ho2=i2+i6; ho3=i3+i7; ho4=i0-i4; ho5=i1-i5; ho6=i2-i6; ho7=i3-i7;
+  
+  // Energy Preservation (Approx 1/sqrt(8))
+  scale = 0.3535; 
+  ho0*=scale; ho1*=scale; ho2*=scale; ho3*=scale; ho4*=scale; ho5*=scale; ho6*=scale; ho7*=scale;
+);
+
+// Biquad Filters
+function update_biquad_hp(freq, Q) instance(a0, a1, a2, b1, b2) local(w0, cosw0, alpha, a0_inv) (
+  srate > 0 ? (
+      freq = max(20, min(20000, freq));
+      w0 = 2 * $pi * freq / srate; cosw0 = cos(w0); alpha = sin(w0) / (2 * Q); a0_inv = 1 / (1 + alpha);
+      a0 = ((1 + cosw0) / 2) * a0_inv; a1 = -(1 + cosw0) * a0_inv; a2 = ((1 + cosw0) / 2) * a0_inv; b1 = -2 * cosw0 * a0_inv; b2 = (1 - alpha) * a0_inv;
+  );
+);
+function update_biquad_lp(freq, Q) instance(a0, a1, a2, b1, b2) local(w0, cosw0, alpha, a0_inv) (
+  srate > 0 ? (
+      freq = max(20, min(20000, freq));
+      w0 = 2 * $pi * freq / srate; cosw0 = cos(w0); alpha = sin(w0) / (2 * Q); a0_inv = 1 / (1 + alpha);
+      a0 = ((1 - cosw0) / 2) * a0_inv; a1 = (1 - cosw0) * a0_inv; a2 = ((1 - cosw0) / 2) * a0_inv; b1 = -2 * cosw0 * a0_inv; b2 = (1 - alpha) * a0_inv;
+  );
+);
+function process_biquad(in) instance(a0, a1, a2, b1, b2, x1, x2, y1, y2) local(out) (
+  out = a0*in + a1*x1 + a2*x2 - b1*y1 - b2*y2; x2 = x1; x1 = in; y2 = y1; y1 = out; out;
+);
+
+// One-Pole Filter (Smoothing)
+function init_one_pole_sat(fc, sample_rate) instance(a0, b1) local(costh) (
+  sample_rate > 0 ? (
+      costh = 2.0 - cos(2 * $pi * fc / sample_rate); b1 = costh - sqrt(costh * costh - 1.0); a0 = 1.0 - b1;
+  );
+);
+function process_one_pole_sat(xn) instance(yn1, a0, b1) local(yn) ( yn = xn * a0 + yn1 * b1; yn1 = yn; yn; );
+
+// Slew Limiter
+function process_slew(xn, limit) instance(last_y) local(delta) (
+  delta = xn - last_y; delta > limit ? delta = limit; delta < -limit ? delta = -limit; last_y += delta; last_y;
+);
+
+// ==============================================================================
+// 2. GUI HELPER FUNCTIONS
+// ==============================================================================
+
+// Pro-Style Buttons
+function draw_pro_button(x, y, w, h, active, label, color_code) 
+local(r, g, b, lw, lh) 
+(
+    // Color Palette Selection based on code
+    color_code == 0 ? ( r=0.4; g=0.7; b=0.9; ) : // Cyan (Clean)
+    color_code == 1 ? ( r=0.9; g=0.6; b=0.2; ) : // Orange (Analog)
+    color_code == 2 ? ( r=0.8; g=0.3; b=0.3; );  // Red (Vintage)
+
+    // Button Background
+    active ? gfx_set(r, g, b, 0.2) : gfx_set(0.15, 0.15, 0.18, 1);
+    gfx_rect(x, y, w, h);
+    
+    // 3D Bevel Effect
+    gfx_set(1, 1, 1, 0.08); gfx_line(x, y, x+w, y); 
+    gfx_set(0, 0, 0, 0.5); gfx_line(x, y+h, x+w, y+h); 
+    
+    // Active Indicator Bar
+    active ? ( 
+        gfx_set(r, g, b, 1); 
+        gfx_rect(x+4, y+h-4, w-8, 2); 
+    );
+
+    // Label
+    active ? gfx_set(1, 1, 1, 1) : gfx_set(1, 1, 1, 0.5);
+    gfx_setfont(2);
+    gfx_measurestr(label, lw, lh); 
+    gfx_x = x + (w - lw)/2; 
+    gfx_y = y + (h - lh)/2 - 1; 
+    gfx_drawstr(label);
+);
+
+// 3D Room Background (Core View)
+function draw_scifi_bg(cx, cy, w, h)
+local(i, back_sz, depth, y_pos, x_start)
+(
+    // Gradient Sky/Ceiling
+    gfx_gradrect(0, 0, w, h, 0.05, 0.05, 0.08, 1.0, 0, 0, 0.0005, 0, 0, 0, 0, 0);
+
+    // Grid Settings
+    gfx_set(0.0, 0.7, 1.0, 0.08); 
+
+    // Center Back Wall
+    back_sz = h * 0.2; 
+    gfx_rect(cx - back_sz, cy - back_sz, back_sz*2, back_sz*2, 0); 
+
+    // Perspective Lines
+    gfx_line(0, 0, cx - back_sz, cy - back_sz);
+    gfx_line(w, 0, cx + back_sz, cy - back_sz);
+    gfx_line(0, h, cx - back_sz, cy + back_sz);
+    gfx_line(w, h, cx + back_sz, cy + back_sz);
+
+    // Floor Radiating Lines
+    i = -6;
+    loop(13,
+        x_start = cx + (i * (w / 8));
+        gfx_line(x_start, h, cx + (i * 20), cy + back_sz);
+        i += 1;
+    );
+
+    // Floor Horizontal Perspective Lines
+    i = 1;
+    loop(8,
+        depth = i / 8; 
+        y_pos = cy + back_sz + (pow(depth, 2) * ((h/2) - back_sz));
+        gfx_line(0, y_pos, w, y_pos);
+        
+        y_pos_ceil = cy - back_sz - (pow(depth, 2) * ((h/2) - back_sz));
+        gfx_line(0, y_pos_ceil, w, y_pos_ceil);
+        
+        i += 1;
+    );
+);
+
+// ==============================================================================
+// 3. MEMORY ALLOCATION & VARIABLES
+// ==============================================================================
+
+use_hp = 100; use_lp = 10000; bit_depth = 65536; p_inertia_val = 1.0; 
+use_decay_max = 2000; use_width = 100; use_drive = 0; use_noise = -140; use_diff = 70;
+use_spec_focus = 0;
+arch_decay_max = 2000; base_hp = 100;
+level_compensation = 1.0;
+
+MAX_SAT_DELAY = 131072; 
+MEM_AUDIO_BASE = 0; 
+MEM_DIFF_BASE = 300000; 
+MEM_FDN_BASE = 600000; 
+
+// Diffusion Pointers
+dl1 = 225; dl2 = 341; dl3 = 441; dl4 = 556;
+ptr_diff1 = 0; ptr_diff2 = 1000; ptr_diff3 = 2000; ptr_diff4 = 3000;
+
+// FDN Primes Setup
+d0=1663; d1=1987; d2=2239; d3=2657; d4=3169; d5=3697; d6=4211; d7=4639;
+s_scale = srate / 44100.0;
+l0=floor(d0*s_scale); l1=floor(d1*s_scale); l2=floor(d2*s_scale); l3=floor(d3*s_scale);
+l4=floor(d4*s_scale); l5=floor(d5*s_scale); l6=floor(d6*s_scale); l7=floor(d7*s_scale);
+
+// FDN Memory Blocks
+FDN_SIZE = 65536;
+p_del0=0; p_del1=65536; p_del2=131072; p_del3=196608;
+p_del4=262144; p_del5=327680; p_del6=393216; p_del7=458752;
+w_ptr = 0;
+
+// Internal Variables
+current_decay = 0.5; target_decay = 0.5;
+current_damping = 0.1; target_damping = 0.1;
+current_size_mod = 1.0; target_size_mod = 1.0;
+current_width = 1.0; target_width = 1.0;
+current_morph_char = 0.0; target_morph_char = 0.0;
+current_diff_s = 0.5; 
+
+// Audio-Rate Smoothers (Prevent Zipper Noise)
+s_decay = 0.5; s_damping = 0.1; s_size_mod = 1.0; s_width = 1.0; smooth_sat_crowd_vca = 1.0;
+
+// Spectral Focus Smoothers
+s_sys_energy = 0; s_sys_spec = 0;
+smooth_hp = 100; smooth_lp = 10000;
+
+lfo_phase = 0;
+sat_rms = 0; sat_env = 0; sat_gain_red = 0; sat_pre_idx = 0; sat_pre_len = 0; sat_look_idx = 0; lookahead_samps = 0;
+depth_slew_thresh = 1.0; depth_width_amt = 1.0; noise_lpf = 0; 
+sat_crowd_vca = 1.0; last_bypass_state = 0; 
+sat_low_energy = 0; sat_trans_energy = 0; sat_spec_energy = 0;
+core_env = 0;
+meter_reduction = 1.0; // Added for CPU optimization
+
+loop_sat_mix = 0.15;
+
+// Sample-Rate Independent Constants
+rumble_coeff = exp(-2.0 * $pi * 25.0 / srate); // Stable 25Hz Rumble Filter
+lfo_inc = 4.41 / srate;                        // Stable ~0.7Hz modulation
+rms_coeff = exp(-2.0 * $pi * 50.0 / srate);    // Stable 50Hz smoothing for RMS
+duck_att_coeff = exp(-1.0 / (0.001 * srate));  // Stable 1ms ducking attack
+duck_rel_coeff = exp(-1.0 / (0.100 * srate));  // Stable 100ms ducking release
+core_env_coeff = exp(-2.0 * $pi * 30.0 / srate); // Stable 30Hz smoothing for Noise Gate
+diff_smooth_coeff = 1.0 - exp(-1.0 / (0.005 * srate)); // Stable 5ms diffusion glide
+param_smooth_coeff = 1.0 - exp(-1.0 / (0.02 * srate)); // Stable 20ms Audio-Rate Smoothing (Liquid glide)
+
+ho0=0; ho1=0; ho2=0; ho3=0; ho4=0; ho5=0; ho6=0; ho7=0;
+
+// Visual smoothing variables
+vis_reduc_db = 0; 
+vis_morph = 0;
+vis_crowd = 0;
+
+instance_seed = (rand(10) - 5); 
+
+// Memory Safety (Clear up to 1.2M bounds)
+memset(MEM_AUDIO_BASE, 0, 1200000); 
+
+last_ui_mode = -1; last_priority = -1; last_link_update_val = -1; last_man_morph_state = -1;
+last_play_state = -1; 
+snap_frames = 0; 
+
+@slider
+
+// Dynamic UI Refreshing
+(p_mode != last_ui_mode || p_man_morph_enable != last_man_morph_state) ? (
+    slider_show(p_priority, 0); slider_show(p_send, 0); slider_show(p_sat_char, 0); slider_show(p_link_id, 0); slider_show(p_sat_enable, 0); slider_show(p_predelay_mode, 0);
+    
+    slider_show(p_man_decay, 0); slider_show(p_man_inertia, 0); slider_show(p_man_drive, 0); slider_show(p_man_noise, 0); slider_show(p_man_width, 0); slider_show(p_man_diff, 0);
+    slider_show(p_man_hp, 0); slider_show(p_man_lp, 0); slider_show(p_man_spec, 0); slider_show(p_man_morph_enable, 0); slider_show(p_man_bits, 0);
+    slider_show(p_out_trim, 0); slider_show(p_adv_decay, 0); slider_show(p_adv_width, 0); slider_show(p_adv_duck, 0);
+    slider_show(m_crowd, 0); slider_show(m_reduc, 0); slider_show(p_bypass, 0); 
+    slider_show(p_transient_duck, 0); slider_show(p_lookahead, 0); slider_show(p_auto_depth, 0); slider_show(m_morph, 0);
+    slider_show(p_gui_preset, 0);
+
+    p_mode == 0 ? (
+      slider_show(p_priority, 1); slider_show(p_send, 1); slider_show(p_predelay_mode, 1); slider_show(p_sat_char, 1); slider_show(p_link_id, 1); slider_show(p_sat_enable, 1); slider_show(m_reduc, 1);
+    ) : (
+      slider_show(p_man_decay, 1); slider_show(p_man_inertia, 1); slider_show(p_man_drive, 1); slider_show(p_man_noise, 1); slider_show(p_man_width, 1);
+      slider_show(p_man_hp, 1); slider_show(p_man_lp, 1); slider_show(p_man_spec, 1); slider_show(p_man_morph_enable, 1);
+      p_man_morph_enable == 0 ? ( slider_show(p_man_diff, 1); ) : ( slider_show(m_morph, 1); );
+      slider_show(p_man_bits, 1); 
+      
+      slider_show(p_out_trim, 1); slider_show(p_adv_duck, 1); slider_show(m_crowd, 1); 
+    );
+    last_ui_mode = p_mode; last_man_morph_state = p_man_morph_enable;
+);
+
+@block
+
+// --- CONTINUOUS PARAMETER MAPPING ---
+// Moving this calculation from @slider to @block ensures that any changes 
+// made via the @gfx UI or DAW automation update the audio engine instantly.
+
+use_decay_max = p_man_decay; 
+use_width = p_man_width; 
+use_drive = p_man_drive; 
+use_noise = p_man_noise; 
+use_spec_focus = p_man_spec;
+
+target_width = p_man_width / 100.0;
+loop_sat_mix = max(0.15, p_man_drive / 100.0);
+level_compensation = 1.0 + ((100 - p_man_drive) / 100.0); 
+
+bit_depth = pow(2, p_man_bits);
+drive_factor = 1.0 + (use_drive / 50.0); 
+noise_gain = pow(10, use_noise / 20.0);
+
+send_gain = pow(10, p_send / 20.0); 
+master_gain = pow(10, (p_out_trim - 24.0) / 20.0);
+
+// Pre-Delay Logic (Tracks UI changes instantly)
+pd_ms = 0;
+p_predelay_mode == 0 ? (
+   base_auto = 60 - (p_priority * 15); pd_ms = max(0, base_auto + instance_seed);
+) : (
+   tempo > 0 ? (
+      beat_ms = 60000 / tempo;
+      p_predelay_mode == 2 ? pd_ms = beat_ms / 16 : 
+      p_predelay_mode == 3 ? pd_ms = beat_ms / 8 : 
+      p_predelay_mode == 4 ? pd_ms = beat_ms / 4 : 
+      p_predelay_mode == 5 ? pd_ms = beat_ms / 2 : 
+      p_predelay_mode == 6 ? pd_ms = beat_ms;
+   );
+);
+sat_pre_len = floor((pd_ms / 1000) * srate); sat_pre_len = max(1, min(sat_pre_len, 32000));
+lookahead_samps = floor(0.003 * srate); 
+
+// Sync Bypass State
+(gmem[7] != last_bypass_state) ? ( p_bypass = gmem[7]; last_bypass_state = p_bypass; slider_automate(p_bypass); );
+(p_bypass != gmem[7]) ? ( gmem[7] = p_bypass; last_bypass_state = p_bypass; );
+(p_mode == 1) ? ( gmem[6] = p_adv_duck; );
+
+// Block Rate Calculation (Ensures macro-smoothing is immune to buffer size changes)
+blk = max(1, samplesblock);
+block_rate = srate / blk;
+
+p_mode == 0 ? (
+  // --- SATELLITE BLOCK LOGIC ---
+  
+  // Safe gmem sync (0 represents empty)
+  (p_link_id > 0) ? (
+      link_addr = 100 + p_link_id; 
+      net_val = gmem[link_addr];
+      
+      (net_val == 0) ? ( net_val = p_priority + 1; gmem[link_addr] = net_val; ); 
+      real_net = net_val - 1;
+      
+      (real_net != p_priority && real_net != last_link_update_val) ? ( 
+          p_priority = real_net; 
+          slider_automate(p_priority); 
+          last_link_update_val = real_net; 
+      );
+      (p_priority != real_net) ? ( 
+          gmem[link_addr] = p_priority + 1; 
+          last_link_update_val = p_priority; 
+      );
+  );
+
+  inv_p = 5 - p_priority; weight = pow(inv_p, 1.5) * 0.2; my_load = sat_env * weight; 
+  (p_sat_enable) ? ( 
+      (sat_env > 0.003) ? (
+          atomic_add(gmem[0], my_load); 
+          (sat_trans_energy > 0.001) ? ( atomic_add(gmem[1], my_load * 2.0); );
+          atomic_add(gmem[3], sat_spec_energy);
+          atomic_add(gmem[5], 1); 
+      );
+      atomic_add(gmem[2], sat_low_energy);
+  );
+  
+  sat_env = 0; sat_trans_energy = 0; sat_low_energy = 0; sat_spec_energy = 0;
+  crowd = min(1.0, gmem[5] / 15); base_depth = p_priority / 4.0; immunity = (4 - p_priority) / 4.0; 
+  final_depth = min(1.0, base_depth + (crowd * 0.5 * (1.0 - immunity)));
+  
+  global_duck_amt = gmem[6]; crowd_squash = crowd * (global_duck_amt / 100.0); 
+  
+  // This target is chased in @sample to eliminate Volume Zippers
+  sat_crowd_vca = 1.0 - (crowd_squash * (1.0 - immunity));
+  
+  // Tone Filter Logic (-50 to +50)
+  base_cut = 22000; base_hp = 10;
+  (p_sat_char < 0) ? ( base_cut = 22000 * pow(0.5, abs(p_sat_char)/25.0); );
+  (p_sat_char > 0) ? ( base_hp = 10 * pow(2.0, p_sat_char/7.0); ); 
+  
+  cut_freq = max(1000, base_cut * pow(0.1, final_depth));
+  lpf_L.init_one_pole_sat(cut_freq, srate); lpf_R.init_one_pole_sat(cut_freq, srate);
+  tone_hp_L.init_one_pole_sat(base_hp, srate); tone_hp_R.init_one_pole_sat(base_hp, srate);
+  
+  ana_hp = 2500; ana_L.init_one_pole_sat(ana_hp, srate); ana_R.init_one_pole_sat(ana_hp, srate);
+  depth_slew_thresh = 1.0 - (final_depth * 0.95); depth_width_amt = 1.0 - (final_depth * 0.6);
+  
+  // CPU-Optimized Logarithmic Meter Math (Calculated once per block)
+  vis_reduc_db = -20.0 * log10(max(0.00001, meter_reduction));
+  meter_coeff = 1.0 - exp(-1.0 / (0.05 * block_rate));
+  m_reduc += (vis_reduc_db - m_reduc) * meter_coeff; 
+  slider_automate(m_reduc);
+  
+) : (
+  // --- CORE BLOCK LOGIC ---
+  
+  // Buffer Independent Morphing Physics
+  p_man_inertia == 0 ? m_time = 0.05 : 
+  p_man_inertia == 1 ? m_time = 0.14 : 
+  p_man_inertia == 2 ? m_time = 0.57 : 
+  p_man_inertia == 3 ? m_time = 2.3 : 
+  m_time = 11.6;
+  
+  morph_coeff = 1.0 - exp(-1.0 / (m_time * block_rate));
+  inertia_coeff = morph_coeff;
+  meter_coeff = 1.0 - exp(-1.0 / (0.05 * block_rate));
+  
+  // Snap-to-state trigger (Turbo mode on playback start)
+  (play_state == 1 && last_play_state != 1) ? ( 
+      snap_frames = 100; 
+      memset(MEM_FDN_BASE, 0, 1000000); 
+      current_decay = 0.1; current_size_mod = 0.5;
+  );
+  last_play_state = play_state;
+  
+  (snap_frames > 0) ? (
+      eff_morph_coeff = 0.5; 
+      eff_inertia_coeff = 0.5; 
+      snap_frames -= 1;
+      
+      // Snap Audio-Rate Smoothers to prevent initial sweep
+      s_decay = current_decay; 
+      s_size_mod = current_size_mod;
+      s_damping = current_damping;
+      s_width = current_width;
+  ) : (
+      eff_morph_coeff = morph_coeff;
+      eff_inertia_coeff = inertia_coeff;
+  );
+
+  // Stop playback resets
+  (play_state == 0 || play_state == 2) ? (
+      gmem[0]=0; gmem[1]=0; gmem[2]=0; gmem[3]=0; gmem[5]=0;
+      real_active_count = 0;
+      feedback_safety = 0.0;
+      
+      current_morph_char = 0;
+      m_morph = 0;
+      m_crowd = 0;
+      slider_automate(m_morph);
+      slider_automate(m_crowd);
+  ) : (
+      norm_scale = (1.0 / blk);
+      raw_energy = (gmem[0] * norm_scale) * 512.0; trans_energy = (gmem[1] * norm_scale) * 512.0;
+      real_active_count = gmem[5]; 
+      gmem[0]=0; gmem[1]=0; gmem[5]=0; gmem[2]=0; gmem[3]=0; 
+      feedback_safety = 1.0;
+  );
+  
+  m_crowd += (real_active_count - m_crowd) * meter_coeff;
+  slider_automate(m_crowd);
+
+  // Dynamic vs Static Morphing Logic
+  (p_man_morph_enable == 1) ? (
+      morph_ratio = trans_energy / (raw_energy + 0.00001); 
+      target_morph_char = min(1.0, morph_ratio * 0.5); 
+      current_morph_char += (target_morph_char - current_morph_char) * eff_morph_coeff; 
+      
+      m_morph += ((current_morph_char * 100) - m_morph) * meter_coeff;
+      slider_automate(m_morph);
+
+      use_diff = 50 + (35 * current_morph_char); 
+      target_size_mod = 1.0 - (0.05 * (1.0 - current_morph_char));
+      
+      lp_morph_shift = current_morph_char * 5000;
+      target_lp = p_man_lp + lp_morph_shift; 
+      target_hp = p_man_hp; 
+  ) : (
+      use_diff = p_man_diff;
+      target_hp = p_man_hp; 
+      target_lp = p_man_lp;
+      target_size_mod = 1.0;
+  );
+
+  // Spectral Focus Filtering (SMOOTHED ENERGY ENVELOPES)
+  (p_mode == 1 && use_spec_focus > 0) ? (
+      sys_energy = raw_energy / 512.0; 
+      sys_spec = (gmem[3] * norm_scale); 
+      
+      // 150ms Envelope for spectral reading to prevent jumps
+      spec_coeff = 1.0 - exp(-1.0 / (0.15 * block_rate));
+      s_sys_energy += (sys_energy - s_sys_energy) * spec_coeff;
+      s_sys_spec += (sys_spec - s_sys_spec) * spec_coeff;
+
+      (s_sys_energy > 0.001) ? (
+         brightness_ratio = s_sys_spec / s_sys_energy; 
+         focus_amt = use_spec_focus / 100.0;
+         mod_lp = brightness_ratio * 10000 * focus_amt;
+         mod_hp = (1.0 - brightness_ratio) * 500 * focus_amt;
+         target_lp = max(2000, target_lp - mod_lp); 
+         target_hp = min(1000, target_hp + mod_hp);
+      );
+  );
+
+  // Glide filters to target to avoid Biquad zipper noise
+  (snap_frames > 0) ? (
+      smooth_hp = target_hp;
+      smooth_lp = target_lp;
+  ) : (
+      // 100ms glide for frequency changes
+      filter_smooth_coeff = 1.0 - exp(-1.0 / (0.1 * block_rate)); 
+      smooth_hp += (target_hp - smooth_hp) * filter_smooth_coeff;
+      smooth_lp += (target_lp - smooth_lp) * filter_smooth_coeff;
+  );
+
+  // Input filtering setup with smoothed frequencies
+  filt_hp_L.update_biquad_hp(smooth_hp, 0.707); filt_hp_R.update_biquad_hp(smooth_hp, 0.707);
+  filt_lp_L.update_biquad_lp(smooth_lp, 0.707); filt_lp_R.update_biquad_lp(smooth_lp, 0.707);
+  
+  target_diff_val = (use_diff / 100.0) * 0.65; 
+
+  norm_energy = min(1.0, (raw_energy * 0.5)); 
+  energy_curve = norm_energy * norm_energy; 
+  crowd_factor = min(1.0, real_active_count / 15); 
+  
+  current_target_ms = use_decay_max - (energy_curve * (use_decay_max - 500)); 
+  current_target_ms = current_target_ms * (1.0 - (crowd_factor * 0.2)); 
+  t_samps = (current_target_ms / 1000) * srate; 
+  
+  target_decay = pow(0.001, 3000.0 / t_samps); target_decay = min(0.999, target_decay);
+  target_damping = 0.1 + (energy_curve * 0.5) + (crowd_factor * 0.3); target_damping = min(0.9, target_damping); 
+  
+  // Physics macro-trajectory application (Calculates the Target for @sample)
+  current_decay += (target_decay - current_decay) * eff_inertia_coeff;
+  current_damping += (target_damping - current_damping) * eff_inertia_coeff;
+  current_size_mod += (target_size_mod - current_size_mod) * (eff_inertia_coeff * 0.5); 
+  current_width += (target_width - current_width) * eff_inertia_coeff;
+);
+
+@sample
+p_mode == 0 ? (
+  // --- SATELLITE AUDIO PROCESSING ---
+  rawL = spl0; rawR = spl1;
+  
+  // Apply Tone Control (HPF for positive values)
+  hp_L = rawL - tone_hp_L.process_one_pole_sat(rawL);
+  hp_R = rawR - tone_hp_R.process_one_pole_sat(rawR);
+  rawL = hp_L; rawR = hp_R;
+  
+  hi_L = ana_L.process_one_pole_sat(rawL); hi_R = ana_R.process_one_pole_sat(rawR);
+  spec_now = (abs(hi_L) + abs(hi_R)) * 0.5; sat_spec_energy += spec_now;
+  
+  depthL = lpf_L.process_one_pole_sat(rawL); depthR = lpf_R.process_one_pole_sat(rawR);
+  depthL = slew_L.process_slew(depthL, depth_slew_thresh); depthR = slew_R.process_slew(depthR, depth_slew_thresh);
+  mid = (depthL + depthR) * 0.5; side = (depthL - depthR) * 0.5; side *= depth_width_amt; 
+  finalL = mid + side; finalR = mid - side; 
+  
+  abs_in = (abs(rawL) + abs(rawR)) * 0.5; sat_env += abs_in; 
+  sat_rms = (sat_rms * rms_coeff) + (abs_in * (1.0 - rms_coeff)); 
+  diff = abs_in - sat_rms; is_transient = (diff > 0.05) ? 1 : 0; 
+  is_transient ? ( sat_trans_energy = abs_in; );
+  
+  // Musical Ducking Envelope (Fast Attack, Slow Release)
+  duck_amt = 1.0; (is_transient) ? ( duck_amt = 1.0 - (p_transient_duck / 100.0); ); 
+  curr_duck_coeff = (duck_amt < sat_gain_red) ? duck_att_coeff : duck_rel_coeff;
+  sat_gain_red = (sat_gain_red * curr_duck_coeff) + (duck_amt * (1.0 - curr_duck_coeff)); 
+  
+  // AUDIO-RATE SMOOTHING for Auto-Mixing VCA (Eliminates Volume Zippers)
+  smooth_sat_crowd_vca += (sat_crowd_vca - smooth_sat_crowd_vca) * param_smooth_coeff;
+  
+  look_buf = MEM_AUDIO_BASE + 100000 + sat_look_idx; delayedL = finalL; delayedR = finalR;
+  (lookahead_samps > 0) ? (
+      delayedL = mem[look_buf]; delayedR = mem[look_buf+1]; mem[look_buf] = finalL; mem[look_buf+1] = finalR;
+      sat_look_idx += 2; sat_look_idx >= (lookahead_samps * 2) ? sat_look_idx = 0;
+  );
+  
+  // Safe 64000 Array Loop
+  pre_buf_loc = MEM_AUDIO_BASE + sat_pre_idx; mem[pre_buf_loc] = delayedL; mem[pre_buf_loc+1] = delayedR;
+  read_idx = sat_pre_idx - (sat_pre_len * 2); read_idx < 0 ? read_idx += 64000; 
+  preL = mem[MEM_AUDIO_BASE + read_idx]; preR = mem[MEM_AUDIO_BASE + read_idx + 1]; 
+  sat_pre_idx += 2; sat_pre_idx >= 64000 ? sat_pre_idx = 0;
+  final_reduction = sat_gain_red * smooth_sat_crowd_vca; 
+  
+  // Store linear value for Block-Rate log10 calculation
+  meter_reduction = final_reduction; 
+  
+  processedL = preL * send_gain * final_reduction; processedR = preR * send_gain * final_reduction;
+  (p_bypass == 1 || p_sat_enable == 0) ? ( spl2 = 0; spl3 = 0; ) : ( spl2 = processedL; spl3 = processedR; );
+) : (
+  // --- CORE AUDIO PROCESSING (FDN 8x8) ---
+  inL = spl0; inR = spl1; 
+  
+  // AUDIO-RATE SMOOTHING (Eliminates clicks, jumps and teleports in the FDN)
+  s_size_mod += (current_size_mod - s_size_mod) * param_smooth_coeff;
+  s_damping += (current_damping - s_damping) * param_smooth_coeff;
+  s_decay += (current_decay - s_decay) * param_smooth_coeff;
+  s_width += (current_width - s_width) * param_smooth_coeff;
+  
+  // Clean input filtering
+  inL = filt_hp_L.process_biquad(inL); inR = filt_hp_R.process_biquad(inR);
+  inL *= level_compensation; inR *= level_compensation;
+  inL = soft_clip(inL * drive_factor); inR = soft_clip(inR * drive_factor);
+  
+  // Smart Noise Gate (Envelope Follower fixed & True Stereo Noise)
+  inst_env = (abs(inL)+abs(inR))*0.5; 
+  core_env = (core_env * core_env_coeff) + (inst_env * (1.0 - core_env_coeff));
+  noiseL = (rand(2.0) - 1.0) * noise_gain; 
+  noiseR = (rand(2.0) - 1.0) * noise_gain; 
+  noise_gate = min(1.0, core_env * 100.0); 
+  inL += noiseL * noise_gate; 
+  inR += noiseR * noise_gate;
+  
+  // Smoothed Input Diffusion
+  current_diff_s += (target_diff_val - current_diff_s) * diff_smooth_coeff; 
+  
+  idx = MEM_DIFF_BASE + ptr_diff1; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff1 = (ptr_diff1+1)%225; inL = ap_out;
+  idx = MEM_DIFF_BASE + ptr_diff2 + 230; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff2 = (ptr_diff2+1)%341; inL = ap_out;
+  idx = MEM_DIFF_BASE + ptr_diff3 + 600; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff3 = (ptr_diff3+1)%441; inL = ap_out;
+  idx = MEM_DIFF_BASE + ptr_diff4 + 1100; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff4 = (ptr_diff4+1)%556; inL = ap_out;
+
+  idx = MEM_DIFF_BASE + ptr_diff1 + 2000; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
+  idx = MEM_DIFF_BASE + ptr_diff2 + 2300; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
+  idx = MEM_DIFF_BASE + ptr_diff3 + 2700; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
+  idx = MEM_DIFF_BASE + ptr_diff4 + 3200; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
+
+  lfo_phase += lfo_inc; mod_val = sin(lfo_phase) * 15.0 * s_size_mod; 
+
+  r0 = GetDelayFDN(MEM_FDN_BASE + p_del0, w_ptr, l0 * s_size_mod + mod_val, FDN_SIZE);
+  r1 = GetDelayFDN(MEM_FDN_BASE + p_del1, w_ptr, l1 * s_size_mod - mod_val, FDN_SIZE);
+  r2 = GetDelayFDN(MEM_FDN_BASE + p_del2, w_ptr, l2 * s_size_mod + mod_val, FDN_SIZE);
+  r3 = GetDelayFDN(MEM_FDN_BASE + p_del3, w_ptr, l3 * s_size_mod, FDN_SIZE);
+  r4 = GetDelayFDN(MEM_FDN_BASE + p_del4, w_ptr, l4 * s_size_mod, FDN_SIZE);
+  r5 = GetDelayFDN(MEM_FDN_BASE + p_del5, w_ptr, l5 * s_size_mod + mod_val, FDN_SIZE);
+  r6 = GetDelayFDN(MEM_FDN_BASE + p_del6, w_ptr, l6 * s_size_mod - mod_val, FDN_SIZE);
+  r7 = GetDelayFDN(MEM_FDN_BASE + p_del7, w_ptr, l7 * s_size_mod, FDN_SIZE);
+
+  idx_st = 499990;
+  r0 = mem[idx_st+0] = r0 * (1-s_damping) + mem[idx_st+0] * s_damping;
+  r1 = mem[idx_st+1] = r1 * (1-s_damping) + mem[idx_st+1] * s_damping;
+  r2 = mem[idx_st+2] = r2 * (1-s_damping) + mem[idx_st+2] * s_damping;
+  r3 = mem[idx_st+3] = r3 * (1-s_damping) + mem[idx_st+3] * s_damping;
+  r4 = mem[idx_st+4] = r4 * (1-s_damping) + mem[idx_st+4] * s_damping;
+  r5 = mem[idx_st+5] = r5 * (1-s_damping) + mem[idx_st+5] * s_damping;
+  r6 = mem[idx_st+6] = r6 * (1-s_damping) + mem[idx_st+6] * s_damping;
+  r7 = mem[idx_st+7] = r7 * (1-s_damping) + mem[idx_st+7] * s_damping;
+
+  // Internal FDN DC Blocking
+  r0 = dc_block0.rumble_cut(r0, rumble_coeff); r1 = dc_block1.rumble_cut(r1, rumble_coeff);
+  r2 = dc_block2.rumble_cut(r2, rumble_coeff); r3 = dc_block3.rumble_cut(r3, rumble_coeff);
+  r4 = dc_block4.rumble_cut(r4, rumble_coeff); r5 = dc_block5.rumble_cut(r5, rumble_coeff);
+  r6 = dc_block6.rumble_cut(r6, rumble_coeff); r7 = dc_block7.rumble_cut(r7, rumble_coeff);
+
+  // Weighted FDN Saturation
+  r0_s = soft_clip(r0*0.5)*2.0; r0 = r0 * (1-loop_sat_mix) + r0_s * loop_sat_mix;
+  r1_s = soft_clip(r1*0.5)*2.0; r1 = r1 * (1-loop_sat_mix) + r1_s * loop_sat_mix;
+  r2_s = soft_clip(r2*0.5)*2.0; r2 = r2 * (1-loop_sat_mix) + r2_s * loop_sat_mix;
+  r3_s = soft_clip(r3*0.5)*2.0; r3 = r3 * (1-loop_sat_mix) + r3_s * loop_sat_mix;
+  r4_s = soft_clip(r4*0.5)*2.0; r4 = r4 * (1-loop_sat_mix) + r4_s * loop_sat_mix;
+  r5_s = soft_clip(r5*0.5)*2.0; r5 = r5 * (1-loop_sat_mix) + r5_s * loop_sat_mix;
+  r6_s = soft_clip(r6*0.5)*2.0; r6 = r6 * (1-loop_sat_mix) + r6_s * loop_sat_mix;
+  r7_s = soft_clip(r7*0.5)*2.0; r7 = r7 * (1-loop_sat_mix) + r7_s * loop_sat_mix;
+
+  hadamard_mix_8(r0,r1,r2,r3,r4,r5,r6,r7);
+
+  final_decay = s_decay * feedback_safety;
+
+  mem[MEM_FDN_BASE + p_del0 + w_ptr] = inL + (ho0 * final_decay);
+  mem[MEM_FDN_BASE + p_del1 + w_ptr] = (ho1 * final_decay);
+  mem[MEM_FDN_BASE + p_del2 + w_ptr] = inR + (ho2 * final_decay);
+  mem[MEM_FDN_BASE + p_del3 + w_ptr] = (ho3 * final_decay);
+  mem[MEM_FDN_BASE + p_del4 + w_ptr] = inL + (ho4 * final_decay);
+  mem[MEM_FDN_BASE + p_del5 + w_ptr] = (ho5 * final_decay);
+  mem[MEM_FDN_BASE + p_del6 + w_ptr] = inR + (ho6 * final_decay);
+  mem[MEM_FDN_BASE + p_del7 + w_ptr] = (ho7 * final_decay);
+
+  w_ptr += 1; w_ptr >= FDN_SIZE ? w_ptr = 0;
+
+  out_L = ho0 + ho2 + ho5; out_R = ho1 + ho3 + ho6;
+  mid = (out_L + out_R) * 0.5; side = (out_L - out_R) * 0.5; side *= s_width; out_L = mid + side; out_R = mid - side;
+  
+  // Safe Output Bit Reduction
+  (p_man_bits < 24) ? (
+      out_L = floor(out_L * bit_depth) / bit_depth; 
+      out_R = floor(out_R * bit_depth) / bit_depth;
+  );
+  
+  // Output Filter
+  out_L = filt_lp_L.process_biquad(out_L); out_R = filt_lp_R.process_biquad(out_R);
+  
+  p_bypass == 1 ? ( spl0 = 0; spl1 = 0; ) : ( spl0 = hard_clip(out_L * master_gain); spl1 = hard_clip(out_R * master_gain); );
+  spl2 = 0; spl3 = 0;
+);
+
+@gfx 400 300
+  // --- GUI BACKGROUND & SETUP ---
+  gfx_clear = 28 + 28*256 + 30*65536; 
+  cx = gfx_w * 0.5; cy = gfx_h * 0.5;
+  
+  gfx_setfont(1, "Arial", 42, 'b'); 
+  gfx_setfont(2, "Arial", 14, 'b'); 
+  gfx_setfont(3, "Arial", 11);      
+  gfx_setfont(4, "Arial", 28, 'b'); 
+  
+  // --- UI MODE SELECTION ---
+  p_mode == 0 ? (
+      // ==========================================
+      // SATELLITE COMPACT TCP MODE
+      // ==========================================
+      p_sat_enable == 0 ? gfx_set(0.1, 0.1, 0.1, 1) : gfx_set(0.15, 0.16, 0.18, 1); 
+      gfx_rect(0, 0, gfx_w, gfx_h);
+
+      margin = 4; spacing = 2; num_btns = 5;
+      avail_w = gfx_w - (margin * 2);
+      bw = max(10, (avail_w - (spacing * (num_btns - 1))) / num_btns);
+      
+      row_h = min(20, max(10, gfx_h * 0.28)); 
+      by = margin;
+
+      link_w = 60; 
+      link_h = row_h;
+      link_x_start = cx - 30; 
+      link_y = gfx_h - margin - link_h;
+
+      pow_r = max(4, row_h * 0.45);
+      pow_cx = gfx_w - margin - pow_r;
+      pow_cy = gfx_h - margin - (row_h * 0.5);
+
+      bar_y = by + row_h + margin;
+      bar_h = link_y - bar_y - margin;
+      bar_h < 4 ? bar_h = 4; 
+      bar_w = gfx_w - (margin * 2);
+      bar_x = margin;
+
+      // Mouse Interactions
+      mouse_cap & 3 ? (
+          is_right_click = (mouse_cap & 2) == 2;
+          last_cap == 0 ? ( 
+              init_mouse_y = mouse_y;
+              init_send = p_send;
+              button_clicked = 0; 
+              
+              // 1. Link Group Button
+              mouse_y >= link_y && mouse_y <= link_y + link_h && mouse_x >= link_x_start && mouse_x <= link_x_start + 60 && !is_right_click ? (
+                  mouse_x < link_x_start + 15 ? (
+                      p_link_id -= 1; (p_link_id < 0) ? p_link_id = 12;
+                  ) : mouse_x > link_x_start + 45 ? (
+                      p_link_id += 1; (p_link_id > 12) ? p_link_id = 0;
+                  ) : (
+                      p_link_id += 1; (p_link_id > 12) ? p_link_id = 0;
+                  );
+                  slider_automate(p_link_id);
+                  button_clicked = 1;
+              ) :
+              // 2. Power Button
+              abs(mouse_x - pow_cx) < (pow_r + 4) && abs(mouse_y - pow_cy) < (pow_r + 4) && !is_right_click ? (
+                  p_sat_enable = 1 - p_sat_enable; 
+                  slider_automate(p_sat_enable);
+                  button_clicked = 1;
+              ) :
+              // 3. Hierarchy Buttons
+              mouse_y >= by && mouse_y <= by + row_h && !is_right_click ? (
+                  clicked_idx = floor((mouse_x - margin) / (bw + spacing));
+                  clicked_idx >= 0 && clicked_idx < 5 ? (
+                      p_priority = clicked_idx;
+                      slider_automate(p_priority);
+                  );
+                  button_clicked = 1;
+              ) :
+              // 4. Drag Zone (Double Click Reset)
+              (
+                  current_time = time_precise();
+                  (current_time - last_click_time) < 0.25 && !is_right_click ? (
+                      p_send = -6;
+                      slider_automate(p_send);
+                      last_click_time = 0; 
+                      button_clicked = 1;
+                  ) : (
+                      last_click_time = current_time;
+                  );
+              );
+          );
+
+          // Drag Logic (Send Value)
+          button_clicked == 0 && !is_right_click ? (
+             dist_y = (init_mouse_y - mouse_y);
+             new_val = init_send + (dist_y * 0.3);
+             p_send = max(-60, min(12, new_val));
+             slider_automate(p_send);
+          );
+      );
+      last_cap = mouse_cap & 3;
+
+      // Draw Hierarchy Buttons
+      btn_alpha = p_sat_enable ? 1 : 0.4;
+      bx = margin;
+      i = 0;
+      loop(5,
+          i == 0 ? ( r=0.8; g=0.2; b=0.2; ) : 
+          i == 1 ? ( r=0.8; g=0.5; b=0.2; ) : 
+          i == 2 ? ( r=0.3; g=0.7; b=0.4; ) : 
+          i == 3 ? ( r=0.3; g=0.4; b=0.7; ) : 
+                   ( r=0.5; g=0.5; b=0.6; );
+                   
+          p_priority == i ? (
+              gfx_set(r, g, b, btn_alpha);
+          ) : (
+              gfx_set(0.2, 0.2, 0.2, btn_alpha);
+          );
+          gfx_rect(bx, by, bw, row_h);
+          
+          p_priority == i ? gfx_set(0, 0, 0, btn_alpha) : gfx_set(0.9, 0.9, 0.9, btn_alpha);
+          gfx_setfont(3);
+          sprintf(#lbl, "%d", i + 1);
+          gfx_measurestr(#lbl, lw, lh);
+          gfx_x = bx + (bw - lw) * 0.5;
+          gfx_y = by + (row_h - lh) * 0.5;
+          gfx_drawstr(#lbl);
+          
+          bx += bw + spacing;
+          i += 1;
+      );
+
+      // Draw Send Level Bar
+      gfx_set(0.08, 0.08, 0.08, 1);
+      gfx_rect(bar_x, bar_y, bar_w, bar_h);
+      
+      normalized_send = (p_send + 60) / 72; 
+      fill_w = bar_w * normalized_send;
+      
+      p_sat_enable ? gfx_set(0.3, 0.5, 0.6, 0.8) : gfx_set(0.3, 0.3, 0.3, 0.4);
+      gfx_rect(bar_x, bar_y, fill_w, bar_h);
+      
+      gfx_setfont(3);
+      gfx_measurestr("SEND", tw, th);
+      gfx_x = bar_x + 4; 
+      gfx_y = bar_y + (bar_h - th) * 0.5;
+      gfx_set(1, 1, 1, p_sat_enable ? 0.4 : 0.2);
+      gfx_drawstr("SEND");
+      
+      gfx_setfont(2);
+      sprintf(#snd, "%.1f dB", p_send);
+      gfx_measurestr(#snd, sw, sh);
+      
+      text_x = bar_x + (bar_w - sw) * 0.5;
+      text_y = bar_y + (bar_h - sh) * 0.5;
+      
+      gfx_set(0, 0, 0, 0.8);
+      gfx_x = text_x + 1; gfx_y = text_y + 1; gfx_drawstr(#snd);
+      gfx_set(1, 1, 1, p_sat_enable ? 0.9 : 0.5);
+      gfx_x = text_x; gfx_y = text_y; gfx_drawstr(#snd);
+
+      // Draw Link ID Component
+      gfx_set(0.15, 0.15, 0.15, btn_alpha); 
+      gfx_rect(link_x_start, link_y, 14, link_h);
+      gfx_set(0.6, 0.6, 0.6, btn_alpha); gfx_setfont(3);
+      gfx_measurestr("<", aw, ah);
+      gfx_x = link_x_start + (14 - aw)*0.5; gfx_y = link_y + (link_h - ah)*0.5;
+      gfx_drawstr("<");
+
+      p_link_id > 0 ? (
+          gfx_set(0.8, 0.8, 0.1, btn_alpha); 
+          gfx_rect(link_x_start + 15, link_y, 30, link_h);
+          gfx_set(0, 0, 0, btn_alpha);
+          sprintf(#lnk, "L%d", p_link_id);
+      ) : (
+          gfx_set(0.2, 0.2, 0.2, btn_alpha);
+          gfx_rect(link_x_start + 15, link_y, 30, link_h);
+          gfx_set(0.6, 0.6, 0.6, btn_alpha);
+          sprintf(#lnk, "LNK"); 
+      );
+      gfx_measurestr(#lnk, lw, lh);
+      gfx_x = link_x_start + 15 + (30 - lw)*0.5;
+      gfx_y = link_y + (link_h - lh)*0.5;
+      gfx_drawstr(#lnk);
+
+      gfx_set(0.15, 0.15, 0.15, btn_alpha); 
+      gfx_rect(link_x_start + 46, link_y, 14, link_h);
+      gfx_set(0.6, 0.6, 0.6, btn_alpha);
+      gfx_measurestr(">", aw, ah);
+      gfx_x = link_x_start + 46 + (14 - aw)*0.5; gfx_y = link_y + (link_h - ah)*0.5;
+      gfx_drawstr(">");
+
+      // Draw Power Button
+      p_sat_enable == 1 ? (
+          gfx_set(0.2, 0.8, 0.3, 1); 
+          gfx_circle(pow_cx, pow_cy, pow_r, 1);
+          gfx_set(1, 1, 1, 0.5); 
+          gfx_circle(pow_cx - (pow_r*0.3), pow_cy - (pow_r*0.3), pow_r*0.25, 1); 
+      ) : (
+          gfx_set(0.15, 0.15, 0.15, 1); 
+          gfx_circle(pow_cx, pow_cy, pow_r, 1);
+          gfx_set(0.6, 0.1, 0.1, 1); 
+          gfx_circle(pow_cx, pow_cy, pow_r, 0); 
+      );
+      
+      gfx_set(0, 0, 0, 1);
+      gfx_circle(pow_cx, pow_cy, pow_r*0.5, 0); 
+      gfx_line(pow_cx, pow_cy - (pow_r*0.7), pow_cx, pow_cy - (pow_r*0.1));
+
+  ) : (
+      // ==========================================
+      // CORE ENGINE MODE
+      // ==========================================
+      
+      (p_mode == 1) ? ( draw_scifi_bg(cx, cy, gfx_w, gfx_h); );
+      
+      gfx_set(1, 1, 1, 0.1); 
+      gfx_setfont(1); gfx_measurestr("THE LIVING ROOM", tw, th);
+      gfx_x = cx - tw/2 + 2; gfx_y = 22; gfx_drawstr("THE LIVING ROOM"); 
+      
+      gfx_set(0.9, 0.9, 0.9, 0.9); 
+      gfx_x = cx - tw/2; gfx_y = 20; gfx_drawstr("THE LIVING ROOM");
+      
+      btn_w = 90; btn_h = 30; spacing = 15;
+      start_x = cx - (btn_w * 1.5) - spacing; 
+      btn_y = gfx_h - 90; 
+      
+      // GUI Presets Selection Logic
+      mouse_cap & 1 && !last_cap ? (
+          mx = mouse_x; my = mouse_y;
+          
+          (mx > start_x && mx < start_x+btn_w && my > btn_y && my < btn_y+btn_h) ? (
+              p_gui_preset=1; p_man_decay=3200; p_man_inertia=1; p_man_drive=0; p_man_noise=-140; p_man_bits=24; p_man_spec=60; p_man_hp=300; p_man_morph_enable=1; p_out_trim=2.5;
+              slider_automate(p_man_decay); slider_automate(p_man_inertia); slider_automate(p_man_drive); slider_automate(p_man_noise); slider_automate(p_man_bits); slider_automate(p_man_spec); slider_automate(p_man_hp); slider_automate(p_man_morph_enable); slider_automate(p_out_trim); slider_automate(p_gui_preset);
+          );
+          bx2 = start_x + btn_w + spacing;
+          (mx > bx2 && mx < bx2+btn_w && my > btn_y && my < btn_y+btn_h) ? (
+              p_gui_preset=2; p_man_decay=2500; p_man_inertia=2; p_man_drive=35; p_man_noise=-90; p_man_bits=24; p_man_spec=20; p_man_hp=450; p_man_morph_enable=1; p_out_trim=-1.5;
+              slider_automate(p_man_decay); slider_automate(p_man_inertia); slider_automate(p_man_drive); slider_automate(p_man_noise); slider_automate(p_man_bits); slider_automate(p_man_spec); slider_automate(p_man_hp); slider_automate(p_man_morph_enable); slider_automate(p_out_trim); slider_automate(p_gui_preset);
+          );
+          bx3 = start_x + (btn_w + spacing)*2;
+          (mx > bx3 && mx < bx3+btn_w && my > btn_y && my < btn_y+btn_h) ? (
+              p_gui_preset=3; p_man_decay=4500; p_man_inertia=3; p_man_drive=60; p_man_noise=-80; p_man_bits=12; p_man_spec=0; p_man_hp=600; p_man_morph_enable=1; p_out_trim=-3.0;
+              slider_automate(p_man_decay); slider_automate(p_man_inertia); slider_automate(p_man_drive); slider_automate(p_man_noise); slider_automate(p_man_bits); slider_automate(p_man_spec); slider_automate(p_man_hp); slider_automate(p_man_morph_enable); slider_automate(p_out_trim); slider_automate(p_gui_preset);
+          );
+          
+          by_cy = gfx_h * 0.4; by_r = 45; 
+          dx = mx - cx; dy = my - by_cy; dist = sqrt(dx*dx + dy*dy);
+          dist < by_r ? ( p_bypass = 1 - p_bypass; slider_automate(p_bypass); gmem[7] = p_bypass; );
+      );
+      
+      draw_pro_button(start_x, btn_y, btn_w, btn_h, p_gui_preset == 1, "CLEAN", 0);
+      draw_pro_button(start_x + btn_w + spacing, btn_y, btn_w, btn_h, p_gui_preset == 2, "ANALOG", 1);
+      draw_pro_button(start_x + (btn_w + spacing)*2, btn_y, btn_w, btn_h, p_gui_preset == 3, "VINTAGE", 2);
+      
+      // Master Bypass Button
+      by_cy = gfx_h * 0.4; by_r = 45; 
+      
+      p_bypass == 0 ? (
+          gfx_set(0, 0.1, 0.1, 1); gfx_circle(cx, by_cy, by_r, 1); 
+          gfx_set(0.1, 0.8, 0.4, 0.8); gfx_circle(cx, by_cy, by_r-4, 1); 
+          gfx_set(1, 1, 1, 0.3); gfx_circle(cx - 15, by_cy - 15, 10, 1); 
+          
+          gfx_set(0, 0.2, 0, 1); gfx_setfont(4); 
+          gfx_measurestr("ON", w, h); gfx_x = cx - w/2; gfx_y = by_cy - h/2; gfx_drawstr("ON");
+          
+          gfx_set(0.6, 0.6, 0.6, 1); gfx_setfont(3);
+          msg = (p_mode == 0) ? "SATELLITE ACTIVE" : "CORE RUNNING"; 
+          gfx_measurestr(msg, w, h); gfx_x = cx - w/2; gfx_y = by_cy + 55; gfx_drawstr(msg);
+      ) : (
+          gfx_set(0.15, 0.15, 0.15, 1); gfx_circle(cx, by_cy, by_r, 1); 
+          gfx_set(0.3, 0.1, 0.1, 1); gfx_circle(cx, by_cy, by_r-4, 1); 
+          
+          gfx_set(0.1, 0, 0, 1); gfx_setfont(4); 
+          gfx_measurestr("OFF", w, h); gfx_x = cx - w/2; gfx_y = by_cy - h/2; gfx_drawstr("OFF");
+          
+          gfx_set(0.5, 0.3, 0.3, 1); gfx_setfont(3); 
+          msg = "BYPASSED"; 
+          gfx_measurestr(msg, w, h); gfx_x = cx - w/2; gfx_y = by_cy + 55; gfx_drawstr(msg);
+      );
+      gfx_set(0,0,0,0.5); gfx_circle(cx, by_cy, by_r, 0); 
+      
+      last_cap = mouse_cap & 1;
+  );
