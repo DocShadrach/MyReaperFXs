@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="b903d7a24ebed3023d6a9db2ef458af082c7cd0d">
+<index version="1" name="DocShadrach FXs" commit="3d6da9178f8703d1a4742a0c3605b3d1346313e0">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -575,6 +575,10 @@ An Eco-System Reverb.
     <version name="1.0.0" author="Doc Shadrach" time="2026-02-23T11:00:00Z">
      <changelog><![CDATA[Initial release.]]></changelog>
     <source file="The_Living_Room.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/c0575f8e2a64446e3cbffafc0a0da78dccdf3077/The_Living_Room.jsfx</source>
+    </version>
+    <version name="1.1.0" author="Doc Shadrach" time="2026-03-08T07:00:00Z">
+     <changelog><![CDATA[Fixing a potential feedback issue.]]></changelog>
+    <source file="The_Living_Room.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/3d6da9178f8703d1a4742a0c3605b3d1346313e0/The_Living_Room.jsfx</source>
     </version>
     </reapack>
   
