@@ -1,6 +1,6 @@
 desc: The Living Room (DocShadrach)
 // author: Doc Shadrach
-// version: 1.0
+// version: 1.1
 // about: An Eco-System Reverb.
 // -----------------------------------------------------------------------------
 // CREDITS & ATTRIBUTION:
@@ -75,7 +75,14 @@ out_pin:aux right
 // 1. DSP FUNCTIONS
 // ==============================================================================
 
+// Input Drive Saturation
 function soft_clip(x) ( x > 1 ? 1 : (x < -1 ? -1 : (1.5 * x - 0.5 * x * x * x)); );
+
+// Passive FDN Saturation (Strictly <= 1.0 gain to prevent feedback howling)
+function fdn_sat(x) (
+  x > 1.29 ? 0.86 : (x < -1.29 ? -0.86 : (x - 0.2 * x * x * x));
+);
+
 function hard_clip(x) ( max(-1.0, min(1.0, x)); ); 
 
 // DC Blocker / Rumble Filter
@@ -687,15 +694,15 @@ p_mode == 0 ? (
   r4 = dc_block4.rumble_cut(r4, rumble_coeff); r5 = dc_block5.rumble_cut(r5, rumble_coeff);
   r6 = dc_block6.rumble_cut(r6, rumble_coeff); r7 = dc_block7.rumble_cut(r7, rumble_coeff);
 
-  // Weighted FDN Saturation
-  r0_s = soft_clip(r0*0.5)*2.0; r0 = r0 * (1-loop_sat_mix) + r0_s * loop_sat_mix;
-  r1_s = soft_clip(r1*0.5)*2.0; r1 = r1 * (1-loop_sat_mix) + r1_s * loop_sat_mix;
-  r2_s = soft_clip(r2*0.5)*2.0; r2 = r2 * (1-loop_sat_mix) + r2_s * loop_sat_mix;
-  r3_s = soft_clip(r3*0.5)*2.0; r3 = r3 * (1-loop_sat_mix) + r3_s * loop_sat_mix;
-  r4_s = soft_clip(r4*0.5)*2.0; r4 = r4 * (1-loop_sat_mix) + r4_s * loop_sat_mix;
-  r5_s = soft_clip(r5*0.5)*2.0; r5 = r5 * (1-loop_sat_mix) + r5_s * loop_sat_mix;
-  r6_s = soft_clip(r6*0.5)*2.0; r6 = r6 * (1-loop_sat_mix) + r6_s * loop_sat_mix;
-  r7_s = soft_clip(r7*0.5)*2.0; r7 = r7 * (1-loop_sat_mix) + r7_s * loop_sat_mix;
+  // Passive Weighted FDN Saturation (Prevents howling)
+  r0_s = fdn_sat(r0); r0 = r0 * (1-loop_sat_mix) + r0_s * loop_sat_mix;
+  r1_s = fdn_sat(r1); r1 = r1 * (1-loop_sat_mix) + r1_s * loop_sat_mix;
+  r2_s = fdn_sat(r2); r2 = r2 * (1-loop_sat_mix) + r2_s * loop_sat_mix;
+  r3_s = fdn_sat(r3); r3 = r3 * (1-loop_sat_mix) + r3_s * loop_sat_mix;
+  r4_s = fdn_sat(r4); r4 = r4 * (1-loop_sat_mix) + r4_s * loop_sat_mix;
+  r5_s = fdn_sat(r5); r5 = r5 * (1-loop_sat_mix) + r5_s * loop_sat_mix;
+  r6_s = fdn_sat(r6); r6 = r6 * (1-loop_sat_mix) + r6_s * loop_sat_mix;
+  r7_s = fdn_sat(r7); r7 = r7 * (1-loop_sat_mix) + r7_s * loop_sat_mix;
 
   hadamard_mix_8(r0,r1,r2,r3,r4,r5,r6,r7);
 
