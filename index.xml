@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="c0575f8e2a64446e3cbffafc0a0da78dccdf3077">
+<index version="1" name="DocShadrach FXs" commit="b903d7a24ebed3023d6a9db2ef458af082c7cd0d">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -555,6 +555,10 @@ Tame the harshness without killing the vibe.
     <version name="1.3.0" author="Doc Shadrach" time="2026-03-02T07:00:00Z">
      <changelog><![CDATA[A Focus parameter is added.]]></changelog>
     <source file="Spectral_Harshness_Control.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/c7c13d266dfa6021b002917c06da96c4225d36b6/Spectral_Harshness_Control.jsfx</source>
+    </version>
+    <version name="1.4.0" author="Doc Shadrach" time="2026-03-08T07:00:00Z">
+     <changelog><![CDATA[Now includes M/S, Solo band, mathematically pure IFFT and some GUI improvements.]]></changelog>
+    <source file="Spectral_Harshness_Control.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/b903d7a24ebed3023d6a9db2ef458af082c7cd0d/Spectral_Harshness_Control.jsfx</source>
     </version>
     </reapack>
 
