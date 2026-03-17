@@ -1,8 +1,8 @@
 desc: Spectral Harshness Control (DocShadrach)
 // author: Doc Shadrach
-// version: 1.4
+// version: 1.5
 // about: Tame the harshness without killing the vibe.
-// Note: v1.4 incorporates some ideas from Fabian and lachinhan (Hosi) from the Reaper forum.
+// Note: incorporates some ideas from the Reaper forum users.
 //
 // Copyright (c) 2026 DocShadrach
 // All rights reserved.
@@ -799,33 +799,51 @@ slider6 > 0 ? (
     cur_r = base_r + (brown_r - base_r) * t; cur_g = base_g + (brown_g - base_g) * t; cur_b = base_b + (brown_b - base_b) * t;
 );
 
-// Draw Attenuation Curve
-gfx_set(cur_r, cur_g, cur_b, 0.9);
-gi = 1; bin_w_hz = srate / fft_size;
+// --- Draw Filled Area & Solid Outline ---
+// Dynamically calculate alpha based on actual GR so the line vanishes silently when inactive/bypassed
+line_alpha = slider9 == 1 ? 0.0 : min(1.0, abs(display_gr) * 10.0);
 
-loop(fft_size_halved - 1,
-    freq = gi * bin_w_hz;
-    freq >= slider1 && freq <= slider2 ? ( 
-        gx = g_x_int + (log(freq) - log_min_int) * scale_x_int;
-        gain = mem[offset_vis_gain + gi];
-        
-        gain < 0.999 ? (
+line_alpha > 0.001 ? (
+    prev_x = -1; prev_y = -1;
+    gi = 1; bin_w_hz = srate / fft_size;
+
+    loop(fft_size_halved - 1,
+        freq = gi * bin_w_hz;
+        freq >= slider1 && freq <= slider2 ? ( 
+            gx = g_x_int + (log(freq) - log_min_int) * scale_x_int;
+            gain = mem[offset_vis_gain + gi];
+            
             gain_db = 20 * log10(max(0.0001, gain));
             gy_end = g_y_int + (-gain_db / max_db_display) * g_h_int;
             gy_end = min(g_y_int + g_h_int, gy_end); 
             
             gx = max(g_x_int, min(g_x_int + g_w_int, gx));
-            gfx_line(gx, g_y_int, gx, gy_end);
+            
+            // Draw Gradient Area Fill (Projections from 0dB at the top)
+            gain < 0.999 ? (
+                gfx_set(cur_r, cur_g, cur_b, 0.35 * line_alpha);
+                gfx_line(gx, g_y_int, gx, gy_end);
+            );
+
+            // Draw Solid Outline over the Area
+            gfx_set(cur_r, cur_g, cur_b, 0.9 * line_alpha);
+            prev_x != -1 ? (
+                gfx_line(prev_x, prev_y, gx, gy_end);
+                // Extra thickness for outline
+                gfx_line(prev_x, prev_y+1, gx, gy_end+1);
+            );
+            
+            prev_x = gx; prev_y = gy_end;
         );
+        gi += 1;
     );
-    gi += 1;
 );
 
 // --- DRAW GR METER ---
 gfx_set(0.12, 0.12, 0.15, 0.9);
 gfx_rect(gr_m_x, gr_m_y, gr_m_w, gr_m_h);
 
-gr_val = min(0, max(-max_db_display, display_gr));
+gr_val = slider9 == 1 ? 0.0 : min(0.0, max(-max_db_display, display_gr));
 gr_bar_h = (-gr_val / max_db_display) * gr_m_h;
 
 gfx_set(cur_r*0.9, cur_g*0.9, cur_b*0.9, 0.9);
@@ -834,8 +852,8 @@ gfx_rect(gr_m_x, gr_m_y, gr_m_w, gr_bar_h);
 // GR Value Text
 gfx_set(0.9, 0.9, 0.9, 0.9);
 gfx_setfont(2, "Arial", 11, 'b');
-display_gr < -0.1 ? (
-    sprintf(#gr_str, "%.1f", display_gr);
+gr_val < -0.1 ? (
+    sprintf(#gr_str, "%.1f", gr_val);
     gfx_measurestr(#gr_str, tw, th);
     text_y = gr_m_y + gr_bar_h + 2;
     text_y + th > gr_m_y + gr_m_h ? text_y = gr_m_y + gr_m_h - th - 2;
