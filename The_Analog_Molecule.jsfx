@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 4.0
+// version: 4.1
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -38,7 +38,7 @@ slider13:t_link_on=0<0,1,1{Off,On}>-Link Active
 slider14:t_flavor=0<0,5,1{Custom,British Class A,Solid State E,US Discrete,Modern Mastering,Reference}>-Console Flavor
 
 // HYBRID ENGINE SWITCH
-slider15:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod}>-Engine Mode
+slider15:t_engine_mode=0<0,1,1{Original v2.0,Iron Mod PLUS}>-Engine Mode
 
 // --- V2.2 FILTERS (LOCAL ONLY) ---
 slider16:t_hpf=0<0,500,1>-High Pass Filter (Hz)
@@ -72,6 +72,12 @@ out_pin:right output
 function tanh(x) local(e2x) (
   e2x = exp(2 * x);
   (e2x - 1) / (e2x + 1);
+);
+
+// --- ADAA 1ST ORDER FUNCTION ---
+function ad1_tanh(x) local(ax) (
+  ax = abs(x);
+  ax + log(1.0 + exp(-2.0 * ax)) - 0.6931471805599453;
 );
 
 // --- FILTER CALCULATION (OPTIMIZED BUTTERWORTH) ---
@@ -189,6 +195,10 @@ hpf_x1L=0; hpf_x2L=0; hpf_y1L=0; hpf_y2L=0;
 hpf_x1R=0; hpf_x2R=0; hpf_y1R=0; hpf_y2R=0;
 lpf_x1L=0; lpf_x2L=0; lpf_y1L=0; lpf_y2L=0;
 lpf_x1R=0; lpf_x2R=0; lpf_y1R=0; lpf_y2R=0;
+
+// ADAA History
+last_xL = 0;
+last_xR = 0;
 
 // Update tracking for filters
 last_hpf = -1; last_lpf = -1; last_filt_state = -1;
@@ -318,7 +328,7 @@ p_init_lock == 1 ? (
 ) : (
     (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
       t_flavor = 0; slider_automate(t_flavor);
-      topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0; 
+      // [FIX] Removed topo reset to preserve analog traits in Custom mode
     );
 );
 
@@ -737,6 +747,9 @@ current_play_state = play_state;
   s_out = target_out;
   s_bypass = target_bypass; // Critical for bypass fade fix
 
+  last_xL = 0;
+  last_xR = 0;
+
   last_play_state = current_play_state;
 );
 // ------------------------------------------------------------------------
@@ -860,10 +873,30 @@ meter_input = (peak > meter_input) ? (meter_input * 0.4 + peak * 0.6) : (meter_i
 );
 // -------------------------------------------------
   
-(t_engine_mode == 1 && t_flavor > 0 && t_bypass == 0) ? (
+(t_engine_mode == 1 && t_bypass == 0) ? (
       (topo_core > 0) ? ( drive_core = 1.0 + (s_thermal * 0.05); sL = sL * drive_core; sR = sR * drive_core; );
       sL += topo_bias; sR += topo_bias; user_sat = 1.0 + (s_analog * 0.03); total_drive = topo_drive_push * user_sat;
-      sL = tanh(sL * total_drive); sR = tanh(sR * total_drive);
+      
+      xL = sL * total_drive;
+      xR = sR * total_drive;
+      
+      // === IRON MOD PLUS (ADAA 1st Order) ===
+      diffL = xL - last_xL;
+      abs(diffL) > 0.00001 ? (
+          sL = (ad1_tanh(xL) - ad1_tanh(last_xL)) / diffL;
+      ) : (
+          sL = tanh(0.5 * (xL + last_xL));
+      );
+      last_xL = xL;
+      
+      diffR = xR - last_xR;
+      abs(diffR) > 0.00001 ? (
+          sR = (ad1_tanh(xR) - ad1_tanh(last_xR)) / diffR;
+      ) : (
+          sR = tanh(0.5 * (xR + last_xR));
+      );
+      last_xR = xR;
+
       sL -= (topo_bias * 0.95); sR -= (topo_bias * 0.95); sL *= 1.05; sR *= 1.05;
 );
 
@@ -1101,7 +1134,7 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     // MAIN CONSOLE UI (Left Panel: 0 to 550)
     // ----------------------------------------------------------------------
     gfx_clear = 28 + 28*256 + 30*65536; 
-    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.0");
+    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.1");
     
     topo_lbl = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
     t_topo == 0 ? ( topo_r = 0.3; topo_g = 0.4; topo_b = 0.6; ) : t_topo == 1 ? ( topo_r = 0.6; topo_g = 0.3; topo_b = 0.3; ) : ( topo_r = 0.5; topo_g = 0.2; topo_b = 0.6; );  
@@ -1143,7 +1176,8 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
       gfx_set(1, 1, 1, 0.3); gfx_setfont(1, "Arial", 11); slave_mode = (t_xt_mode == 0) ? "VINTAGE" : (t_xt_mode == 1) ? "MODERN" : "BOUTIQUE"; res_mode = (t_xt_res == 0) ? "LITE" : "HEAVY";
       info_s = sprintf(#, "XT SYNC: %s | %s", slave_mode, res_mode); gfx_measurestr(info_s, iw, ih); gfx_x = 50; gfx_y = 240; gfx_drawstr(info_s);
     );
-    eng_name = (t_engine_mode == 0) ? "ENGINE: ORIGINAL v2.0" : "ENGINE: IRON MOD"; eng_r = (t_engine_mode == 0) ? 0.2 : 0.8; eng_g = (t_engine_mode == 0) ? 0.6 : 0.2; eng_b = 0.2;
+    
+    eng_name = (t_engine_mode == 0) ? "ENGINE: ORIGINAL v2.0" : "ENGINE: IRON MOD PLUS"; eng_r = (t_engine_mode == 0) ? 0.2 : 0.8; eng_g = (t_engine_mode == 0) ? 0.6 : 0.2; eng_b = 0.2;
     
     draw_button(300, 235, 200, 20, 1, eng_name, eng_r, eng_g, eng_b);
     (mouse_cap & 1 && !last_cap && mouse_x >= 300 && mouse_x <= 500 && mouse_y >= 235 && mouse_y <= 255) ? ( t_engine_mode = 1 - t_engine_mode; slider_automate(t_engine_mode); gmem[24] = t_engine_mode; );
@@ -1185,13 +1219,13 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
 
     sl_x = 160; sl_w = 300; sl_y = bar_y + 85; sl_spc = 25;
     nv = draw_h_slider(404, sl_x, sl_y, sl_w, 10, t_flux, 0, 100, 20, "3D Flux (Phase Depth)", "%", 0.2, 0.5, 0.8);
-    nv != t_flux ? ( t_flux = nv; slider_automate(t_flux); t_flavor > 0 ? (t_flavor = 0; slider_automate(t_flavor); topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;); );
+    nv != t_flux ? ( t_flux = nv; slider_automate(t_flux); t_flavor > 0 ? (t_flavor = 0; slider_automate(t_flavor);); );
 
     nv = draw_h_slider(405, sl_x, sl_y + sl_spc, sl_w, 10, t_thermal, 0, 100, 20, "Thermal Bloom (Inertia)", "%", 0.2, 0.5, 0.8);
-    nv != t_thermal ? ( t_thermal = nv; slider_automate(t_thermal); t_flavor > 0 ? (t_flavor = 0; slider_automate(t_flavor); topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;); );
+    nv != t_thermal ? ( t_thermal = nv; slider_automate(t_thermal); t_flavor > 0 ? (t_flavor = 0; slider_automate(t_flavor);); );
 
     nv = draw_h_slider(406, sl_x, sl_y + sl_spc*2, sl_w, 10, t_analog, 0, 100, 12, "Analog Texture (Ist)", "%", 0.2, 0.5, 0.8);
-    nv != t_analog ? ( t_analog = nv; slider_automate(t_analog); t_flavor > 0 ? (t_flavor = 0; slider_automate(t_flavor); topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;); );
+    nv != t_analog ? ( t_analog = nv; slider_automate(t_analog); t_flavor > 0 ? (t_flavor = 0; slider_automate(t_flavor);); );
 
     sl_y_drive = sl_y + sl_spc*3.5; drive_val = t_topo == 2 ? t_drive_g : t_drive; drive_lbl = t_topo == 2 ? "Global Calib / Drive" : "Compensated Drive";
     nv = draw_h_slider(407, sl_x, sl_y_drive, sl_w, 12, drive_val, -12, 12, 0, drive_lbl, "dB", 0.8, 0.2, 0.3); 
