@@ -1,6 +1,6 @@
 desc: The Living Room (DocShadrach)
 // author: Doc Shadrach
-// version: 1.1
+// version: 1.2
 // about: An Eco-System Reverb.
 // -----------------------------------------------------------------------------
 // CREDITS & ATTRIBUTION:
@@ -93,13 +93,15 @@ function rumble_cut(in, coeff) instance(last_x, last_y) (
 );
 
 // Delay Line Reader (Linear Interpolation)
+// OPTIMIZATION: Replaced slow while loops with single conditional. 
+// Replaced slow floor() function with lightning-fast bitwise OR (| 0)
 function GetDelayFDN(mem_start, write_pos, delay_samps, buffer_size)
 local(read_pos, i, f, s0, s1)
 (
   read_pos = write_pos - delay_samps;
-  while (read_pos < 0) ( read_pos += buffer_size; );
-  while (read_pos >= buffer_size) ( read_pos -= buffer_size; );
-  i = floor(read_pos); f = read_pos - i;
+  read_pos < 0 ? read_pos += buffer_size;
+  i = read_pos | 0; 
+  f = read_pos - i;
   s0 = mem[mem_start + i]; 
   i += 1; i >= buffer_size ? i = 0; s1 = mem[mem_start + i]; 
   s0 + f * (s1 - s0);
@@ -146,8 +148,12 @@ function init_one_pole_sat(fc, sample_rate) instance(a0, b1) local(costh) (
 function process_one_pole_sat(xn) instance(yn1, a0, b1) local(yn) ( yn = xn * a0 + yn1 * b1; yn1 = yn; yn; );
 
 // Slew Limiter
+// OPTIMIZATION: Removed slow conditional branches, used native JSFX min/max logic
 function process_slew(xn, limit) instance(last_y) local(delta) (
-  delta = xn - last_y; delta > limit ? delta = limit; delta < -limit ? delta = -limit; last_y += delta; last_y;
+  delta = xn - last_y; 
+  delta = min(limit, max(-limit, delta));
+  last_y += delta; 
+  last_y;
 );
 
 // ==============================================================================
@@ -280,7 +286,7 @@ depth_slew_thresh = 1.0; depth_width_amt = 1.0; noise_lpf = 0;
 sat_crowd_vca = 1.0; last_bypass_state = 0; 
 sat_low_energy = 0; sat_trans_energy = 0; sat_spec_energy = 0;
 core_env = 0;
-meter_reduction = 1.0; // Added for CPU optimization
+meter_reduction = 1.0; 
 
 loop_sat_mix = 0.15;
 
@@ -301,7 +307,12 @@ vis_reduc_db = 0;
 vis_morph = 0;
 vis_crowd = 0;
 
-instance_seed = (rand(10) - 5); 
+// Generate a random seed only once per instance to guarantee determinism
+// between live playback and offline rendering.
+seed_generated == 0 ? (
+    instance_seed = (rand(10) - 5); 
+    seed_generated = 1;
+);
 
 // Memory Safety (Clear up to 1.2M bounds)
 memset(MEM_AUDIO_BASE, 0, 1200000); 
@@ -309,6 +320,13 @@ memset(MEM_AUDIO_BASE, 0, 1200000);
 last_ui_mode = -1; last_priority = -1; last_link_update_val = -1; last_man_morph_state = -1;
 last_play_state = -1; 
 snap_frames = 0; 
+
+@serialize
+// --- STATE RECALL FOR DETERMINISM ---
+// Save and load the instance seed into the REAPER project file/preset.
+// This ensures offline renders and project reloads sound exactly the same as live playback.
+file_var(0, instance_seed);
+file_var(0, seed_generated);
 
 @slider
 
@@ -339,9 +357,6 @@ snap_frames = 0;
 @block
 
 // --- CONTINUOUS PARAMETER MAPPING ---
-// Moving this calculation from @slider to @block ensures that any changes 
-// made via the @gfx UI or DAW automation update the audio engine instantly.
-
 use_decay_max = p_man_decay; 
 use_width = p_man_width; 
 use_drive = p_man_drive; 
@@ -358,6 +373,14 @@ noise_gain = pow(10, use_noise / 20.0);
 
 send_gain = pow(10, p_send / 20.0); 
 master_gain = pow(10, (p_out_trim - 24.0) / 20.0);
+
+// OPTIMIZATION: Precalculate inverse constants to avoid CPU-heavy division (/) in the @sample block
+inv_bit_depth = 1.0 / bit_depth;
+inv_rms = 1.0 - rms_coeff;
+inv_duck_att = 1.0 - duck_att_coeff;
+inv_duck_rel = 1.0 - duck_rel_coeff;
+inv_core_env = 1.0 - core_env_coeff;
+p_transient_duck_target = 1.0 - (p_transient_duck / 100.0);
 
 // Pre-Delay Logic (Tracks UI changes instantly)
 pd_ms = 0;
@@ -599,15 +622,24 @@ p_mode == 0 ? (
   mid = (depthL + depthR) * 0.5; side = (depthL - depthR) * 0.5; side *= depth_width_amt; 
   finalL = mid + side; finalR = mid - side; 
   
-  abs_in = (abs(rawL) + abs(rawR)) * 0.5; sat_env += abs_in; 
-  sat_rms = (sat_rms * rms_coeff) + (abs_in * (1.0 - rms_coeff)); 
-  diff = abs_in - sat_rms; is_transient = (diff > 0.05) ? 1 : 0; 
-  is_transient ? ( sat_trans_energy = abs_in; );
+  // OPTIMIZATION: Envelope follower & ducking now using precalculated inverse coefficients 
+  // and fast branch instructions.
+  abs_in = (abs(rawL) + abs(rawR)) * 0.5; 
+  sat_env += abs_in; 
+  sat_rms = (sat_rms * rms_coeff) + (abs_in * inv_rms); 
   
-  // Musical Ducking Envelope (Fast Attack, Slow Release)
-  duck_amt = 1.0; (is_transient) ? ( duck_amt = 1.0 - (p_transient_duck / 100.0); ); 
-  curr_duck_coeff = (duck_amt < sat_gain_red) ? duck_att_coeff : duck_rel_coeff;
-  sat_gain_red = (sat_gain_red * curr_duck_coeff) + (duck_amt * (1.0 - curr_duck_coeff)); 
+  (abs_in - sat_rms) > 0.05 ? (
+      sat_trans_energy = abs_in;
+      duck_amt = p_transient_duck_target;
+  ) : (
+      duck_amt = 1.0;
+  );
+
+  duck_amt < sat_gain_red ? (
+      sat_gain_red = (sat_gain_red * duck_att_coeff) + (duck_amt * inv_duck_att);
+  ) : (
+      sat_gain_red = (sat_gain_red * duck_rel_coeff) + (duck_amt * inv_duck_rel);
+  );
   
   // AUDIO-RATE SMOOTHING for Auto-Mixing VCA (Eliminates Volume Zippers)
   smooth_sat_crowd_vca += (sat_crowd_vca - smooth_sat_crowd_vca) * param_smooth_coeff;
@@ -646,8 +678,9 @@ p_mode == 0 ? (
   inL = soft_clip(inL * drive_factor); inR = soft_clip(inR * drive_factor);
   
   // Smart Noise Gate (Envelope Follower fixed & True Stereo Noise)
+  // OPTIMIZATION: Using precalculated inv_core_env
   inst_env = (abs(inL)+abs(inR))*0.5; 
-  core_env = (core_env * core_env_coeff) + (inst_env * (1.0 - core_env_coeff));
+  core_env = (core_env * core_env_coeff) + (inst_env * inv_core_env);
   noiseL = (rand(2.0) - 1.0) * noise_gain; 
   noiseR = (rand(2.0) - 1.0) * noise_gain; 
   noise_gate = min(1.0, core_env * 100.0); 
@@ -657,11 +690,25 @@ p_mode == 0 ? (
   // Smoothed Input Diffusion
   current_diff_s += (target_diff_val - current_diff_s) * diff_smooth_coeff; 
   
-  idx = MEM_DIFF_BASE + ptr_diff1; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff1 = (ptr_diff1+1)%225; inL = ap_out;
-  idx = MEM_DIFF_BASE + ptr_diff2 + 230; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff2 = (ptr_diff2+1)%341; inL = ap_out;
-  idx = MEM_DIFF_BASE + ptr_diff3 + 600; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff3 = (ptr_diff3+1)%441; inL = ap_out;
-  idx = MEM_DIFF_BASE + ptr_diff4 + 1100; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); ptr_diff4 = (ptr_diff4+1)%556; inL = ap_out;
+  // OPTIMIZATION: Removed slow modulo operations (%). Using fast conditional adds (+) instead.
+  // L Channel
+  idx = MEM_DIFF_BASE + ptr_diff1; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); 
+  ptr_diff1 += 1; ptr_diff1 >= 225 ? ptr_diff1 = 0;
+  inL = ap_out;
 
+  idx = MEM_DIFF_BASE + ptr_diff2 + 230; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); 
+  ptr_diff2 += 1; ptr_diff2 >= 341 ? ptr_diff2 = 0;
+  inL = ap_out;
+
+  idx = MEM_DIFF_BASE + ptr_diff3 + 600; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); 
+  ptr_diff3 += 1; ptr_diff3 >= 441 ? ptr_diff3 = 0;
+  inL = ap_out;
+
+  idx = MEM_DIFF_BASE + ptr_diff4 + 1100; ap_out = mem[idx] - (current_diff_s * inL); mem[idx] = inL + (current_diff_s * ap_out); 
+  ptr_diff4 += 1; ptr_diff4 >= 556 ? ptr_diff4 = 0;
+  inL = ap_out;
+
+  // R Channel (Pointers reuse identical offset positions safely)
   idx = MEM_DIFF_BASE + ptr_diff1 + 2000; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
   idx = MEM_DIFF_BASE + ptr_diff2 + 2300; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
   idx = MEM_DIFF_BASE + ptr_diff3 + 2700; ap_out = mem[idx] - (current_diff_s * inR); mem[idx] = inR + (current_diff_s * ap_out); inR = ap_out;
@@ -723,9 +770,10 @@ p_mode == 0 ? (
   mid = (out_L + out_R) * 0.5; side = (out_L - out_R) * 0.5; side *= s_width; out_L = mid + side; out_R = mid - side;
   
   // Safe Output Bit Reduction
+  // OPTIMIZATION: Swapped division (/) for precalculated inverse multiplication (*)
   (p_man_bits < 24) ? (
-      out_L = floor(out_L * bit_depth) / bit_depth; 
-      out_R = floor(out_R * bit_depth) / bit_depth;
+      out_L = floor(out_L * bit_depth) * inv_bit_depth; 
+      out_R = floor(out_R * bit_depth) * inv_bit_depth;
   );
   
   // Output Filter
