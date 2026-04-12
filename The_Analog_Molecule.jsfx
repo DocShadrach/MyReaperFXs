@@ -328,7 +328,7 @@ p_init_lock == 1 ? (
 ) : (
     (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
       t_flavor = 0; slider_automate(t_flavor);
-      //[FIX] Removed topo reset to preserve analog traits in Custom mode
+      // [FIX] Removed topo reset to preserve analog traits in Custom mode
     );
 );
 
@@ -730,7 +730,7 @@ eff_drive = (t_topo == 2) ? t_drive : (t_drive + global_drive_offset);
 
 // Always update targets based on new effective drive using Safe Pow
 target_calib = pow(10, (eff_drive + topo_offset) / 20); // [SAFETY] Safe Pow
-target_out = pow(10, (t_out_gain - eff_drive - topo_offset) / 20); //[SAFETY] Safe Pow
+target_out = pow(10, (t_out_gain - eff_drive - topo_offset) / 20); // [SAFETY] Safe Pow
 
 target_flux = t_flux / 100; target_thermal = t_thermal / 100; target_analog = t_analog / 100; target_bypass = 1.0 - t_bypass;
 topology_interstage = t_topo == 0 ? 1.0 : 0.85; topology_flux_depth = t_topo == 0 ? 1.0 : 0.3; 
@@ -777,7 +777,7 @@ t_topo == 2 ? (
 );
 
 safe_bank_ptr = gmem[PTR_BANK];
-//[SAFETY FIX] SANITIZE BANK POINTER (Prevent reading garbage memory)
+// [SAFETY FIX] SANITIZE BANK POINTER (Prevent reading garbage memory)
 (safe_bank_ptr < 0 || safe_bank_ptr > 1) ? safe_bank_ptr = 0;
 
 @sample
