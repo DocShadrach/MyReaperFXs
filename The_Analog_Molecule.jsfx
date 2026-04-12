@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 4.1
+// version: 4.2
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -328,7 +328,7 @@ p_init_lock == 1 ? (
 ) : (
     (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
       t_flavor = 0; slider_automate(t_flavor);
-      // [FIX] Removed topo reset to preserve analog traits in Custom mode
+      //[FIX] Removed topo reset to preserve analog traits in Custom mode
     );
 );
 
@@ -341,37 +341,37 @@ p_init_lock == 1 ? (
      
      // British (1)
      match = 0;
-     t_topo == 0 ? ( c_flx==35 && c_thm==40 && c_ana==25 ? match=1; );
-     t_topo == 1 ? ( c_flx==25 && c_thm==50 && c_ana==30 ? match=1; );
-     t_topo == 2 ? ( c_flx==15 && c_thm==30 && c_ana==20 && t_xt_mode==0 ? match=1; );
+     t_topo == 0 ? ( c_flx==350 && c_thm==400 && c_ana==250 ? match=1; );
+     t_topo == 1 ? ( c_flx==250 && c_thm==500 && c_ana==300 ? match=1; );
+     t_topo == 2 ? ( c_flx==150 && c_thm==300 && c_ana==200 && t_xt_mode==0 ? match=1; );
      match ? match_flv = 1;
      
      // Solid State E (2)
      match = 0;
-     t_topo == 0 ? ( c_flx==20 && c_thm==20 && c_ana==15 ? match=1; );
-     t_topo == 1 ? ( c_flx==15 && c_thm==35 && c_ana==20 ? match=1; );
-     t_topo == 2 ? ( c_flx==10 && c_thm==20 && c_ana==12 && t_xt_mode==1 ? match=1; );
+     t_topo == 0 ? ( c_flx==200 && c_thm==200 && c_ana==150 ? match=1; );
+     t_topo == 1 ? ( c_flx==150 && c_thm==350 && c_ana==200 ? match=1; );
+     t_topo == 2 ? ( c_flx==100 && c_thm==200 && c_ana==120 && t_xt_mode==1 ? match=1; );
      match ? match_flv = 2;
 
      // US Discrete (3)
      match = 0;
-     t_topo == 0 ? ( c_flx==10 && c_thm==10 && c_ana==10 ? match=1; );
-     t_topo == 1 ? ( c_flx==10 && c_thm==15 && c_ana==12 ? match=1; );
-     t_topo == 2 ? ( c_flx==5 && c_thm==10 && c_ana==8 && t_xt_mode==0 ? match=1; );
+     t_topo == 0 ? ( c_flx==100 && c_thm==100 && c_ana==100 ? match=1; );
+     t_topo == 1 ? ( c_flx==100 && c_thm==150 && c_ana==120 ? match=1; );
+     t_topo == 2 ? ( c_flx==50 && c_thm==100 && c_ana==80 && t_xt_mode==0 ? match=1; );
      match ? match_flv = 3;
 
      // Modern (4)
      match = 0;
-     t_topo == 0 ? ( c_flx==5 && c_thm==5 && c_ana==5 ? match=1; );
-     t_topo == 1 ? ( c_flx==5 && c_thm==5 && c_ana==5 ? match=1; );
-     t_topo == 2 ? ( c_flx==2 && c_thm==5 && c_ana==2 && t_xt_mode=2 ? match=1; );
+     t_topo == 0 ? ( c_flx==50 && c_thm==50 && c_ana==50 ? match=1; );
+     t_topo == 1 ? ( c_flx==50 && c_thm==50 && c_ana==50 ? match=1; );
+     t_topo == 2 ? ( c_flx==20 && c_thm==50 && c_ana==20 && t_xt_mode==2 ? match=1; );
      match ? match_flv = 4;
      
      // Reference (5)
      match = 0;
-     t_topo == 0 ? ( c_flx==20 && c_thm==20 && c_ana==12 ? match=1; );
-     t_topo == 1 ? ( c_flx==12 && c_thm==30 && c_ana==15 ? match=1; );
-     t_topo == 2 ? ( c_flx==8 && c_thm==20 && c_ana==10 && t_xt_mode==0 ? match=1; );
+     t_topo == 0 ? ( c_flx==200 && c_thm==200 && c_ana==120 ? match=1; );
+     t_topo == 1 ? ( c_flx==120 && c_thm==300 && c_ana==150 ? match=1; );
+     t_topo == 2 ? ( c_flx==80 && c_thm==200 && c_ana==100 && t_xt_mode==0 ? match=1; );
      match ? match_flv = 5;
      
      t_flavor = match_flv;
@@ -537,25 +537,25 @@ last_link_state = t_link_on;
        b_flx = to_int(t_flux); b_thm = to_int(t_thermal); b_ana = to_int(t_analog);
        
        net_flavor == 1 ? ( // British Class A
-         t_topo == 0 ? ( b_flx==35 && b_thm==40 && b_ana==25 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==25 && b_thm==50 && b_ana==30 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==15 && b_thm==30 && b_ana==20 && t_xt_mode==0 ? chk_match=1; );
+         t_topo == 0 ? ( b_flx==350 && b_thm==400 && b_ana==250 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==250 && b_thm==500 && b_ana==300 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==150 && b_thm==300 && b_ana==200 && t_xt_mode==0 ? chk_match=1; );
        ) : net_flavor == 2 ? ( // Solid State E
-         t_topo == 0 ? ( b_flx==20 && b_thm==20 && b_ana==15 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==15 && b_thm==35 && b_ana==20 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==10 && b_thm==20 && b_ana==12 && t_xt_mode==1 ? chk_match=1; );
+         t_topo == 0 ? ( b_flx==200 && b_thm==200 && b_ana==150 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==150 && b_thm==350 && b_ana==200 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==100 && b_thm==200 && b_ana==120 && t_xt_mode==1 ? chk_match=1; );
        ) : net_flavor == 3 ? ( // US Discrete
-         t_topo == 0 ? ( b_flx==10 && b_thm==10 && b_ana==10 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==10 && b_thm==15 && b_ana==12 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==5 && b_thm==10 && b_ana==8 && t_xt_mode==0 ? chk_match=1; );
+         t_topo == 0 ? ( b_flx==100 && b_thm==100 && b_ana==100 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==100 && b_thm==150 && b_ana==120 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==50 && b_thm==100 && b_ana==80 && t_xt_mode==0 ? chk_match=1; );
        ) : net_flavor == 4 ? ( // Modern
-         t_topo == 0 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==5 && b_thm==5 && b_ana==5 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==2 && b_thm==5 && b_ana==2 && t_xt_mode=2 ? chk_match=1; );
+         t_topo == 0 ? ( b_flx==50 && b_thm==50 && b_ana==50 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==50 && b_thm==50 && b_ana==50 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==20 && b_thm==50 && b_ana==20 && t_xt_mode==2 ? chk_match=1; );
        ) : net_flavor == 5 ? ( // Reference
-         t_topo == 0 ? ( b_flx==20 && b_thm==20 && b_ana==12 ? chk_match=1; );
-         t_topo == 1 ? ( b_flx==12 && b_thm==30 && b_ana==15 ? chk_match=1; );
-         t_topo == 2 ? ( b_flx==8 && b_thm==20 && b_ana==10 && t_xt_mode==0 ? chk_match=1; );
+         t_topo == 0 ? ( b_flx==200 && b_thm==200 && b_ana==120 ? chk_match=1; );
+         t_topo == 1 ? ( b_flx==120 && b_thm==300 && b_ana==150 ? chk_match=1; );
+         t_topo == 2 ? ( b_flx==80 && b_thm==200 && b_ana==100 && t_xt_mode==0 ? chk_match=1; );
        );
        
        chk_match == 0 ? perform_load = 0;
@@ -777,7 +777,7 @@ t_topo == 2 ? (
 );
 
 safe_bank_ptr = gmem[PTR_BANK];
-// [SAFETY FIX] SANITIZE BANK POINTER (Prevent reading garbage memory)
+//[SAFETY FIX] SANITIZE BANK POINTER (Prevent reading garbage memory)
 (safe_bank_ptr < 0 || safe_bank_ptr > 1) ? safe_bank_ptr = 0;
 
 @sample
@@ -1134,7 +1134,7 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     // MAIN CONSOLE UI (Left Panel: 0 to 550)
     // ----------------------------------------------------------------------
     gfx_clear = 28 + 28*256 + 30*65536; 
-    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.1");
+    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.2");
     
     topo_lbl = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
     t_topo == 0 ? ( topo_r = 0.3; topo_g = 0.4; topo_b = 0.6; ) : t_topo == 1 ? ( topo_r = 0.6; topo_g = 0.3; topo_b = 0.3; ) : ( topo_r = 0.5; topo_g = 0.2; topo_b = 0.6; );  
