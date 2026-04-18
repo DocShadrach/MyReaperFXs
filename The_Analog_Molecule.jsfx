@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 4.2
+// version: 4.3
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -585,13 +585,13 @@ last_link_state = t_link_on;
     last_flux_int = cur_flux_int; last_thermal_int = cur_thermal_int; last_analog_int = cur_analog_int;
   );
   
-  (t_flavor != last_flavor && t_flavor > 0) ? (
-    scope_ch_active ? gmem[1000 + link_base_idx + 4] = t_flavor;
-    scope_bus_active ? gmem[2000 + link_base_idx + 4] = t_flavor;
-    scope_mtr_active ? gmem[3000 + link_base_idx + 4] = t_flavor;
-    last_flavor = t_flavor;
+  // --- BUGFIX v4.3: Broadcast -1 to network when flavor changes to Custom (0) ---
+  (t_flavor != last_flavor) ? ( 
+    scope_ch_active ? gmem[1000 + 4] = (t_flavor == 0 ? -1 : t_flavor); 
+    scope_bus_active ? gmem[2000 + 4] = (t_flavor == 0 ? -1 : t_flavor); 
+    scope_mtr_active ? gmem[3000 + 4] = (t_flavor == 0 ? -1 : t_flavor); 
+    last_flavor = t_flavor; 
   );
-  (t_flavor != last_flavor) ? last_flavor = t_flavor;
 
 ) : (
   last_flux_int = to_int(t_flux); last_thermal_int = to_int(t_thermal); last_analog_int = to_int(t_analog); last_trim_int = to_int(t_out_gain); last_flavor = t_flavor;
@@ -1134,7 +1134,7 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     // MAIN CONSOLE UI (Left Panel: 0 to 550)
     // ----------------------------------------------------------------------
     gfx_clear = 28 + 28*256 + 30*65536; 
-    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.2");
+    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.3");
     
     topo_lbl = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
     t_topo == 0 ? ( topo_r = 0.3; topo_g = 0.4; topo_b = 0.6; ) : t_topo == 1 ? ( topo_r = 0.6; topo_g = 0.3; topo_b = 0.3; ) : ( topo_r = 0.5; topo_g = 0.2; topo_b = 0.6; );  
@@ -1212,9 +1212,11 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     t_flavor == 1 ? (r_b=0.8; g_b=0.2; b_b=0.2); t_flavor == 2 ? (r_b=0.9; g_b=0.9; b_b=0.2); t_flavor == 3 ? (r_b=0.2; g_b=0.6; b_b=1.0); t_flavor == 4 ? (r_b=0.8; g_b=0.4; b_b=0.8); t_flavor == 5 ? (r_b=0.7; g_b=0.7; b_b=0.7);
     draw_button(330, bar_y + 15, 190, 50, 0, flav_name, 0, 0, 0); t_flavor > 0 ? ( gfx_set(r_b, g_b, b_b, 1); gfx_rect(330, bar_y + 62, 190, 3); );
     gfx_set(1, 1, 1, 0.5); gfx_triangle(490, bar_y+35, 500, bar_y+35, 495, bar_y+45);
+    
+    // [BUGFIX] Removed "Custom" from the selectable dropdown list
     (mouse_cap & 1 && !last_cap && mouse_x >= 330 && mouse_x <= 520 && mouse_y >= bar_y+15 && mouse_y <= bar_y+65) ? (
-      gfx_x = mouse_x; gfx_y = mouse_y; sel = gfx_showmenu("Custom|British Class A|Solid State E|US Discrete|Modern|Reference");
-      sel > 0 ? ( last_flavor = -1; t_flavor = sel - 1; slider_automate(t_flavor); load_flavor(t_flavor); );
+      gfx_x = mouse_x; gfx_y = mouse_y; sel = gfx_showmenu("British Class A|Solid State E|US Discrete|Modern|Reference");
+      sel > 0 ? ( last_flavor = -1; t_flavor = sel; slider_automate(t_flavor); load_flavor(t_flavor); );
     );
 
     sl_x = 160; sl_w = 300; sl_y = bar_y + 85; sl_spc = 25;
