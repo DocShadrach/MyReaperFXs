@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 2.0
+// version: 2.1
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -172,10 +172,10 @@ t_topo == 0 ? (
   slider_show(16384, 0);
 );
 
-gmem[16] = t_bypass;
-gmem[17] = t_delta;
-gmem[18] = t_inertia;
-// gmem[19] (OS) removed
+gmem[1000000 + 16] = t_bypass;
+gmem[1000000 + 17] = t_delta;
+gmem[1000000 + 18] = t_inertia;
+// gmem[1000000 + 19] (OS) removed
 
 target_drive = pow(10, t_drive/20);
 
@@ -199,13 +199,13 @@ t_topo != last_topo ? (
   t_topo == 1 && t_mode == 4 ? ( t_mode = 0; slider_automate(t_mode); );
   last_topo = t_topo;
 );
-t_topo == 1 ? ( g_mode_force = (t_mode == 4) ? 0 : t_mode; gmem[15] = g_mode_force; );
+t_topo == 1 ? ( g_mode_force = (t_mode == 4) ? 0 : t_mode; gmem[1000000 + 15] = g_mode_force; );
 
 @block
-gmem[16] != last_global_bypass ? (t_bypass = gmem[16]; slider_automate(t_bypass); last_global_bypass = t_bypass; );
-gmem[17] != last_global_delta ? (t_delta = gmem[17]; slider_automate(t_delta); last_global_delta = t_delta; );
-gmem[18] != last_global_inertia ? (
-  t_inertia = gmem[18]; slider_automate(t_inertia); last_global_inertia = t_inertia;
+gmem[1000000 + 16] != last_global_bypass ? (t_bypass = gmem[1000000 + 16]; slider_automate(t_bypass); last_global_bypass = t_bypass; );
+gmem[1000000 + 17] != last_global_delta ? (t_delta = gmem[1000000 + 17]; slider_automate(t_delta); last_global_delta = t_delta; );
+gmem[1000000 + 18] != last_global_inertia ? (
+  t_inertia = gmem[1000000 + 18]; slider_automate(t_inertia); last_global_inertia = t_inertia;
   rail_inertia_coeff = exp(-inv_srate / (max(t_inertia, 1) / 1000));
   local_inertiaL = rail_inertia_coeff * (0.99 + (t_stem * 0.001));
   local_inertiaR = rail_inertia_coeff * (0.98 + (t_stem * 0.002));
@@ -214,10 +214,10 @@ gmem[18] != last_global_inertia ? (
 // Global OS logic removed
 
 // FIX v1.9: Replaced time_precise() with play_position for deterministic offline rendering
-drift_mod = sin(play_position * 0.05) * 0.001 + (1.0 - gmem[20]) * 0.0025; 
+drift_mod = sin(play_position * 0.05) * 0.001 + (1.0 - gmem[1000000 + 20]) * 0.0025; 
 
 t_topo == 1 ? (
-  g_tick = atomic_add(gmem[100], 1);
+  g_tick = atomic_add(gmem[1000000 + 100], 1);
   any_solo = 0;
   
   // [FIX] CALCULATE ACTIVE STEMS IN BLOCK, NOT SAMPLE
@@ -225,7 +225,7 @@ t_topo == 1 ? (
   active_stems = 0; 
   ki = 0; loop(8,
     // FIX v1.9: Increased tolerance from 5 to 100 to prevent dropouts during fast offline render
-    active_map[ki] = (g_tick - gmem[200 + ki] < 100) ? 1 : 0;
+    active_map[ki] = (g_tick - gmem[1000000 + 200 + ki] < 100) ? 1 : 0;
     stem_solo[ki] ? any_solo = 1;
     
     // Count logical active stems for Headroom Calculation
@@ -239,10 +239,10 @@ t_topo == 1 ? (
   target_headroom = active_stems > 1 ? 1 / pow(active_stems, 0.25) : 1.0;
   
   g_mode_force = (t_mode == 4) ? 0 : t_mode;
-  gmem[15] = g_mode_force;
+  gmem[1000000 + 15] = g_mode_force;
 ) : (
-  master_clock = gmem[100]; 
-  gmem[200 + t_stem] = master_clock;
+  master_clock = gmem[1000000 + 100]; 
+  gmem[1000000 + 200 + t_stem] = master_clock;
   master_clock == last_master_tick ? ( m_watchdog += 1; m_watchdog > 30 ? has_master = 0 : has_master = 1; ) : ( m_watchdog = 0; last_master_tick = master_clock; has_master = 1; );
 );
 
@@ -260,7 +260,7 @@ fpdR = (fpdR * 1103515245 + 12345) & 2147483647;
 jitterL = (fpdL / 2147483647 - 0.5) * 0.0000001;
 jitterR = (fpdR / 2147483647 - 0.5) * 0.0000001;
 
-actual_mode = (t_topo == 0 && t_mode == 4) ? gmem[15] : t_mode;
+actual_mode = (t_topo == 0 && t_mode == 4) ? gmem[1000000 + 15] : t_mode;
 (t_topo == 1 && actual_mode == 4) ? actual_mode = 0; 
 headroom_offset = pow(10, -t_drive / 60); 
 
@@ -280,7 +280,7 @@ t_topo == 0 ? (
     eff_stem_drive = 1 + (s_drive - 1) * min(stem_energy_smooth_arr[t_stem] * energy_factor, 1);
     
     has_master_smooth = has_master_smooth * 0.99 + has_master * 0.01;
-    gr = gmem[20]; (gr <= 0 || gr > 2.0) ? gr = 1.0;
+    gr = gmem[1000000 + 20]; (gr <= 0 || gr > 2.0) ? gr = 1.0;
     global_rail_raw = gr * has_master_smooth + (1.0 - has_master_smooth);
     local_railL = local_railL * local_inertiaL + global_rail_raw * (1.0 - local_inertiaL);
     local_railR = local_railR * local_inertiaR + global_rail_raw * (1.0 - local_inertiaR);
@@ -345,7 +345,7 @@ t_topo == 0 ? (
   total_demand = 0;
   
   // --- GRAVITY CONTEXT SETUP ---
-  g_rail = gmem[20];
+  g_rail = gmem[1000000 + 20];
   g_stress_factor = (1.0 - g_rail) * 5.0; // 0.0 to ~1.0
   
   grav_thresh = 0.6 - (s_gravity * 0.4) - (g_stress_factor * 0.2 * s_gravity);
@@ -438,7 +438,7 @@ t_topo == 0 ? (
     );
     
     rail_smooth = rail_smooth * rail_inertia_coeff + target_sag * (1.0 - rail_inertia_coeff);
-    gmem[20] = rail_smooth; 
+    gmem[1000000 + 20] = rail_smooth; 
     
     // [FIX] APPLY SMOOTHED HEADROOM (Calculated in @block)
     // This removes the zipper noise caused by instant headroom switching
@@ -535,7 +535,7 @@ t_topo == 0 ? (
     );
   ) : (
     // MASTER SUMMER BYPASS
-    spl0 = dryL; spl1 = dryR; gmem[20] = 1.0;
+    spl0 = dryL; spl1 = dryR; gmem[1000000 + 20] = 1.0;
     // MOD v1.8: Updated Bypass Decay to use Additive Denorm
     h_hystL = (h_hystL * 0.5) + denorm; h_hystR = (h_hystR * 0.5) + denorm;
     last_sumL = (last_sumL * 0.5) + denorm; last_sumR = (last_sumR * 0.5) + denorm; 
@@ -551,7 +551,7 @@ gfx_set(1, 1, 1, 0.4); gfx_setfont(1, "Arial", 32, 'b');
 gfx_x = 20; gfx_y = 15; gfx_drawstr("THE HOT SUMMER");
 gfx_setfont(1, "Arial", 12); gfx_x = 20; gfx_y = 55;
 mouse_cap & 1 && !last_cap && mouse_x > 20 && mouse_x < 400 && mouse_y > 50 && mouse_y < 70 ? (
-  t_bypass = 1 - t_bypass; gmem[16] = t_bypass; slider_automate(t_bypass);
+  t_bypass = 1 - t_bypass; gmem[1000000 + 16] = t_bypass; slider_automate(t_bypass);
 );
 t_bypass == 1 ? (
   gfx_set(1, 0.9, 0, 1); gfx_drawstr("SUMMING MODE: CLEAN DIGITAL SUM (GLOBAL SUMMER BYPASS)");
@@ -563,7 +563,7 @@ t_bypass == 1 ? (
       gfx_drawstr(sprintf(#, "MODE: STEM SENDER | STATUS: %s", has_master ? "SYNCED" : "OFFLINE"));
       t_mode == 4 ? (
         gfx_x = 20; gfx_y = 70; gfx_set(0.5, 0.8, 1, 1);
-        m_name = (gmem[15] == 1) ? "VINTAGE BRITISH" : (gmem[15] == 2) ? "DISCRETE AMERICAN" : (gmem[15] == 3) ? "MODERN ULTRA-LINEAR" : "SIGNATURE";
+        m_name = (gmem[1000000 + 15] == 1) ? "VINTAGE BRITISH" : (gmem[1000000 + 15] == 2) ? "DISCRETE AMERICAN" : (gmem[1000000 + 15] == 3) ? "MODERN ULTRA-LINEAR" : "SIGNATURE";
         gfx_drawstr(sprintf(#, "SYNCED TO MASTER: %s", m_name));
       ) : (
         gfx_x = 20; gfx_y = 70; gfx_set(1, 0.6, 0.2, 1);
@@ -633,13 +633,13 @@ t_topo == 1 && t_bypass == 0 ? (
   );
   
   gfx_set(1, 0.6, 0, 1); gfx_x = 20; gfx_y = 180;
-  sag_percent = (1.0 - gmem[20]) * 100;
+  sag_percent = (1.0 - gmem[1000000 + 20]) * 100;
   gfx_drawstr(sprintf(#, "BUS STRESS (RAIL SAG): %.1f%%", sag_percent));
   
   gfx_set(0.1, 0.1, 0.1, 1); gfx_rect(20, 200, 460, 16);
   gfx_set(1, 0.4, 0, 1); 
   
-  rail_vis = (1.0 - gmem[20]) * 5000; 
+  rail_vis = (1.0 - gmem[1000000 + 20]) * 5000; 
   gfx_rect(20, 200, min(rail_vis, 460), 16);
   
   // GRAVITY VISUAL (STATIC - MOVED UP TO FIT)
