@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="DocShadrach FXs" commit="a12da2b4673df834b69d4495df587734318a1dec">
+<index version="1" name="DocShadrach FXs" commit="bf8495f72c50cbe412ceb059ca3cba3573a8cad1">
 
  <category name="Utilities">
     <reapack name="Tempo_Synced_Pre-Delay.jsfx" type="effect" desc="Tempo Synced Pre-Delay (DocShadrach)">
@@ -435,6 +435,10 @@ A 16-ch Analog-Like Stem Summer.
     <version name="2.0.0" author="Doc Shadrach" time="2026-02-11T07:00:00Z">
      <changelog><![CDATA[Optimized headroom calculations to prevent unwanted distortion and hiding of the Master Output Gain slider for the Stem topology.]]></changelog>
     <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/55df849ec29c5c3f97145b104c55f936474dae32/The_Hot_Summer.jsfx</source>
+    </version>
+    <version name="2.1.0" author="Doc Shadrach" time="2026-05-20T07:00:00Z">
+     <changelog><![CDATA[Shifting the gmem index to avoid conflicts when using with TAMD via YSFX.]]></changelog>
+    <source file="The_Hot_Summer.jsfx">https://raw.githubusercontent.com/DocShadrach/MyReaperFXs/bf8495f72c50cbe412ceb059ca3cba3573a8cad1/The_Hot_Summer.jsfx</source>
     </version>
     </reapack>
 
