@@ -1,6 +1,6 @@
 desc: The Hot Summer (DocShadrach)
 // author: Doc Shadrach
-// version: 2.1
+// version: 2.2
 // about: Analog-Like Stem Summer. 16-ch native routing. 
 // 
 // This plugin incorporates some DSP concepts
@@ -642,8 +642,8 @@ t_topo == 1 && t_bypass == 0 ? (
   rail_vis = (1.0 - gmem[1000000 + 20]) * 5000; 
   gfx_rect(20, 200, min(rail_vis, 460), 16);
   
-  // GRAVITY VISUAL (STATIC - MOVED UP TO FIT)
-  t_gravity > 0 ? (
+  // GRAVITY VISUAL & INTERACTION 
+  t_gravity >= 0 ? (
      gfx_set(0.5, 0.2, 1.0, 1); gfx_x = 20; gfx_y = 225;
      gfx_drawstr(sprintf(#, "GRAVITY ENGINE: %.1f%%", t_gravity));
      
@@ -657,14 +657,35 @@ t_topo == 1 && t_bypass == 0 ? (
      gfx_measurestr(lbl, lw, lh); gfx_x = btn_x + (btn_w-lw)/2; gfx_y = btn_y + (btn_h-lh)/2;
      gfx_drawstr(lbl);
      
-     (mouse_cap & 1 && !(last_mouse_cap & 1) && mouse_x >= btn_x && mouse_x <= btn_x+btn_w && mouse_y >= btn_y && mouse_y <= btn_y+btn_h) ? (
-       t_grav_bypass = 1 - t_grav_bypass; slider_automate(t_grav_bypass);
+     // --- EXCLUSIVE HITBOX LOGIC ---
+     bar_y = 245;
+     
+     in_btn = (mouse_x >= btn_x && mouse_x <= btn_x+btn_w && mouse_y >= btn_y && mouse_y <= btn_y+btn_h);
+     in_bar = (mouse_x >= 20 && mouse_x <= 480 && mouse_y >= bar_y - 10 && mouse_y <= bar_y + 10);
+     
+     in_btn ? (
+         (mouse_cap & 1 && !last_cap) ? (
+             t_grav_bypass = 1 - t_grav_bypass; slider_automate(t_grav_bypass);
+         );
+     ) : in_bar ? (
+         mouse_wheel != 0 ? (
+             t_gravity += (mouse_wheel > 0 ? 1.0 : -1.0);
+             t_gravity = max(min(t_gravity, 100), 0);
+             slider_automate(t_gravity);
+             mouse_wheel = 0; // Consume the wheel event
+         );
+         (mouse_cap & 1) ? (
+             t_gravity = ((mouse_x - 20) / 460) * 100;
+             t_gravity = max(min(t_gravity, 100), 0);
+             t_gravity = floor(t_gravity * 10 + 0.5) / 10; // Round to 1 decimal
+             slider_automate(t_gravity);
+         );
      );
 
-     // STATIC BAR ONLY - Shows how much Gravity is dialed in
+     // INTERACTIVE BAR - Shows how much Gravity is dialed in
      gfx_set(0.5, 0.2, 1.0, 1);
      bar_w = 460 * (t_gravity/100);
-     gfx_rect(20, 245, bar_w, 4);
+     gfx_rect(20, bar_y, bar_w, 4);
   );
 );
 last_cap = mouse_cap;
