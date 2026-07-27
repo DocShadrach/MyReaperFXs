@@ -1,6 +1,6 @@
 desc: The Analog Molecule (DocShadrach)
 // author: Doc Shadrach
-// version: 4.3
+// version: 4.4
 // about: Professional 180-Channel 3D Console Emulator.
 // 
 // This plugin uses DSP algorithms by Chris Johnson (Airwindows)
@@ -142,6 +142,9 @@ last_net_engine = t_engine_mode; last_loc_engine = t_engine_mode;
 last_net_xt_mode = t_xt_mode; last_loc_xt_mode = t_xt_mode;
 last_net_res = t_xt_res; last_loc_res = t_xt_res; // NEW for v2.9
 
+// FIX: Initialize trackers for Ghost Slider Logic
+last_t_drive = t_drive; last_t_drive_g = t_drive_g;
+
 // STARTUP LOCK TIMER
 startup_lock = 0;
 
@@ -280,22 +283,20 @@ slider_show(t_flavor, 0);
 slider_show(t_engine_mode, 0); 
 slider_show(t_xt_res, 0); 
 
-// --- GHOST SLIDER LOGIC (SAFE SYNC) ---
+// --- GHOST SLIDER LOGIC (SAFE SYNC BIDIRECTIONAL) ---
 // [MOD] Ensure init is done to prevent automation bursts
 s_init_done ? (
-  t_topo == 2 ? (
-     (t_drive != t_drive_g) ? (
-        t_drive = t_drive_g; // Master logic rules
-        slider7 = t_drive;   // Keep hidden slider updated
-        slider_automate(t_drive); // UPDATE HOST
-     );
-  ) : (
-     (t_drive_g != t_drive) ? (
-        t_drive_g = t_drive; // Channel logic rules
-        slider8 = t_drive;   // Keep hidden slider updated
-        slider_automate(t_drive_g); // UPDATE HOST
-     );
+  t_drive != last_t_drive ? (
+     t_drive_g = t_drive; 
+     slider8 = t_drive;   
+     slider_automate(t_drive_g); // UPDATE HOST
+  ) : t_drive_g != last_t_drive_g ? (
+     t_drive = t_drive_g; 
+     slider7 = t_drive;   
+     slider_automate(t_drive); // UPDATE HOST
   );
+  last_t_drive = t_drive;
+  last_t_drive_g = t_drive_g;
 );
 
 // Toggle Visibility based on Topology
@@ -325,6 +326,8 @@ p_init_lock == 1 ? (
     last_flux_int = cur_flux_int;
     last_thermal_int = cur_thermal_int;
     last_analog_int = cur_analog_int;
+    // FIX: Ensure flavor internal variables are loaded on project recall to prevent the "silent bug"
+    t_flavor > 0 ? load_flavor(t_flavor);
 ) : (
     (loading_preset == 0 && t_flavor > 0 && (cur_flux_int != last_flux_int || cur_thermal_int != last_thermal_int || cur_analog_int != last_analog_int)) ? (
       t_flavor = 0; slider_automate(t_flavor);
@@ -385,14 +388,17 @@ p_init_lock == 1 ? (
 );
 
 t_topo != last_topo ? (
-  t_flavor > 0 ? (
-    load_flavor(t_flavor);
-  ) : (
-    t_topo == 0 ? ( t_flux = 20; t_thermal = 20; t_analog = 12; ) : 
-    t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
-    t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
-    slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
-    topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
+  // FIX: Only overwrite parameters if the user is actively changing the topology (p_init_lock == 0)
+  p_init_lock == 0 ? (
+    t_flavor > 0 ? (
+      load_flavor(t_flavor);
+    ) : (
+      t_topo == 0 ? ( t_flux = 20; t_thermal = 20; t_analog = 12; ) : 
+      t_topo == 1 ? ( t_flux = 12; t_thermal = 30; t_analog = 15; ) : 
+      t_topo == 2 ? ( t_flux = 8; t_thermal = 20; t_analog = 10; );
+      slider_automate(t_flux); slider_automate(t_thermal); slider_automate(t_analog);
+      topo_bias = 0.0; topo_core = 0.0; topo_drive_push = 1.0;
+    );
   );
   last_topo = t_topo;
   last_flux_int = to_int(t_flux); 
@@ -419,6 +425,9 @@ t_topo == 2 ? topo_offset = -8.0;
 target_calib = pow(10, (t_drive + topo_offset) / 20);
 target_out = pow(10, (t_out_gain - t_drive - topo_offset) / 20);
 target_bypass = 1.0 - t_bypass; 
+
+@serialize
+file_var(0, s_init_done);
 
 @block
 p_init_lock = 0; // RELEASE UI LOCK
@@ -1134,7 +1143,7 @@ spl0 = (procL * s_bypass) + (rawL * (1 - s_bypass)); spl1 = (procR * s_bypass) +
     // MAIN CONSOLE UI (Left Panel: 0 to 550)
     // ----------------------------------------------------------------------
     gfx_clear = 28 + 28*256 + 30*65536; 
-    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.3");
+    gfx_set(1, 1, 1, 0.18); gfx_x = 10; gfx_y = 10; gfx_setfont(1, "Arial", 32, 'b'); gfx_drawstr("THE ANALOG MOLECULE 4.4");
     
     topo_lbl = t_topo == 0 ? "CHANNEL" : t_topo == 1 ? "BUS" : "MASTER";
     t_topo == 0 ? ( topo_r = 0.3; topo_g = 0.4; topo_b = 0.6; ) : t_topo == 1 ? ( topo_r = 0.6; topo_g = 0.3; topo_b = 0.3; ) : ( topo_r = 0.5; topo_g = 0.2; topo_b = 0.6; );  
